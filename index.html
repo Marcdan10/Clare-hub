@@ -316,6 +316,51 @@
   #syncChip.ok{color:var(--win);background:var(--win-soft)}
   #syncChip.saving{color:var(--brand-deep);background:var(--brand-soft)}
   #syncChip.off{color:var(--loss);background:var(--loss-soft)}
+
+  /* ---------- Informes ---------- */
+  .rep-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+  .rep-head .chip{width:52px;height:52px;font-size:1.2rem}
+  .rep-head .rp-name{font-size:1.2rem;font-weight:800;letter-spacing:-.02em}
+  .rep-head .rp-sub{color:var(--muted);font-size:.82rem;font-weight:600}
+  .stat-tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:8px;margin-bottom:14px}
+  .tile{background:#f6f8fc;border-radius:14px;padding:12px 8px;text-align:center}
+  .tile .tv{font-size:1.45rem;font-weight:800;letter-spacing:-.03em;line-height:1.1}
+  .tile .tl{font-size:.62rem;font-weight:700;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);margin-top:3px}
+  .tile.win .tv{color:var(--win)} .tile.loss .tv{color:var(--loss)} .tile.brand .tv{color:var(--brand-deep)}
+  .repChart{display:flex;align-items:flex-end;gap:3px;height:64px;margin-bottom:14px}
+  .repChart .bar{flex:1;min-width:4px;background:var(--brand);border-radius:4px 4px 0 0}
+  .repChart .bar.est{background:#ffc39e}
+  .repChart .bar.cero{background:var(--line)}
+  .rk-row{display:flex;align-items:center;gap:10px;padding:9px 2px;border-bottom:1px solid var(--line)}
+  .rk-row:last-child{border-bottom:none}
+  .rk-pos{width:30px;height:30px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:.85rem;background:#f2f4f9;color:var(--muted);flex:none}
+  .rk-pos.p1{background:#ffe9a8;color:#8a6a00}
+  .rk-pos.p2{background:#e8ebf3;color:#5a6478}
+  .rk-pos.p3{background:#ffdcc4;color:#9a4a10}
+  .rk-name{min-width:110px;font-weight:700;font-size:.92rem;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rk-sub{color:var(--muted);font-weight:500;font-size:.75rem}
+  .rk-bar{flex:1;height:10px;background:#eef1f7;border-radius:99px;overflow:hidden}
+  .rk-fill{height:100%;background:linear-gradient(90deg,var(--brand),#ff8a4d);border-radius:99px}
+  .rk-val{min-width:64px;text-align:right;font-weight:800;font-size:.95rem}
+  .forma{display:flex;gap:4px;flex-wrap:wrap;margin:4px 0 14px}
+  .forma .vd{margin:0}
+  .rep-list{list-style:none}
+  .rep-list li{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;border-bottom:1px solid var(--line);font-size:.9rem}
+  .rep-list li:last-child{border-bottom:none}
+  .rep-list .k{color:var(--muted);font-weight:600}
+  .rep-list .v{font-weight:700;text-align:right}
+  table.cruces{min-width:0}
+  table.cruces th:first-child, table.cruces td:first-child{
+    position:sticky;left:0;background:var(--card);text-align:left;z-index:2;
+    max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:.78rem;
+  }
+  table.cruces td{font-size:.78rem;font-weight:700;padding:7px 5px;white-space:nowrap}
+  table.cruces td.diag{background:#eef1f7;color:transparent}
+  table.cruces td.cw{background:var(--win-soft);color:var(--win)}
+  table.cruces td.cl{background:var(--loss-soft);color:var(--loss)}
+  table.cruces tr.usrow td{background:#fff8f3}
+  table.cruces tr.usrow td.cw{background:var(--win-soft)}
+  table.cruces tr.usrow td.cl{background:var(--loss-soft)}
 </style>
 </head>
 <body>
@@ -2545,9 +2590,10 @@ function genReport(){
       const m = x => Math.round(x/pjJ);
       rows.push(['MEDIA', m(total.pts), m(total.t1), m(total.t2), m(total.t3), m(total.reb), m(total.ast), m(total.rob), m(total.tap), m(total.per), m(total.fal), m(valoracion(total))]);
     }
-    rep = {titulo: `Partido a partido · ${pl.nombre}`,
+    rep = {tipo:'jugadora', titulo: `Partido a partido · ${pl.nombre}`,
            headers: ['Partido','PTS','T1','T2','T3','REB','AST','ROB','TAP','PÉR','FAL','VAL'],
-           rows, nota: (hayEst ? 'Los partidos marcados con ~ tienen estadísticas estimadas. ' : '') + 'T1/T2/T3: anotados/intentos (si constan los fallos).'};
+           rows, nota: (hayEst ? 'Los partidos marcados con ~ tienen estadísticas estimadas. ' : '') + 'T1/T2/T3: anotados/intentos (si constan los fallos).',
+           extra: {pl, pjJ, total, serie: rows.slice(0, rows.length - (pjJ>0?2:1)).map(r => ({pts: Number(r[1])||0, est: String(r[0]).includes('~')}))}};
   }
 
   if(tipo === 'ranking'){
@@ -2569,9 +2615,10 @@ function genReport(){
       return {nombre: p.nombre, n, valor, texto, media: n ? (cat==='pj'?'—':String(Math.round((cat==='val'?valoracion(st):cat.startsWith('pct')?0:st[cat])/n))) : '—'};
     }).sort((a,b)=> b.valor - a.valor || a.nombre.localeCompare(b.nombre));
     const rows = data.map((d,i)=>[i+1, d.nombre, d.n, d.texto, cat.startsWith('pct')||cat==='pj' ? '—' : d.media]);
-    rep = {titulo: `Ranking · ${nombresCat[cat]}`,
+    rep = {tipo:'ranking', titulo: `Ranking · ${nombresCat[cat]}`,
            headers: ['#','Jugadora','PJ', nombresCat[cat], 'Media/PJ'],
-           rows, nota: 'Ordenado de mayor a menor. Incluye partidos estimados si los hay.'};
+           rows, nota: 'Ordenado de mayor a menor. Incluye partidos estimados si los hay.',
+           extra: {data, cat}};
   }
 
   if(tipo === 'equipo'){
@@ -2602,9 +2649,10 @@ function genReport(){
       ['Mejor racha de victorias', mejorRacha],
       ['Máximas anotadoras', top.map(t=>`${t.n} (${t.pts})`).join(' · ')]
     ];
-    rep = {titulo: `Estadísticas del equipo · ${sd.name}`,
+    rep = {tipo:'equipo', titulo: `Estadísticas del equipo · ${sd.name}`,
            headers: ['Concepto','Valor'], rows,
-           nota: est ? `${est} de los ${res.length} partidos tienen estadísticas estimadas (~).` : ''};
+           nota: est ? `${est} de los ${res.length} partidos tienen estadísticas estimadas (~).` : '',
+           extra: {res: [...res].sort((a,b)=>a.jn-b.jn), V:V.length, D:D.length, pf, pc, mejor, peor, mejorRacha, top, casa, fuera}};
   }
 
   if(tipo === 'cruces'){
@@ -2637,31 +2685,129 @@ function genReport(){
       }
       return r;
     });
-    rep = {titulo: `Cuadro de resultados · ${sd.name}`,
+    rep = {tipo:'cruces', titulo: `Cuadro de resultados · ${sd.name}`,
            headers, rows,
-           nota: 'Cada celda es el resultado del partido: el equipo de la COLUMNA jugó en casa y el de la FILA fuera. Leyenda: ' + orden.map(t=>`${abrevs.get(t.id)} = ${t.name}`).join(' · ')};
+           nota: 'Cada celda es el resultado del partido: el equipo de la COLUMNA jugó en casa y el de la FILA fuera. Leyenda: ' + orden.map(t=>`${abrevs.get(t.id)} = ${t.name}`).join(' · '),
+           extra: {orden, ourId: L.ourId}};
   }
 
   if(!rep) return;
   lastReport = rep;
   $('repTitulo').textContent = rep.titulo;
   $('repNota').textContent = rep.nota || '';
-  const tbl = document.createElement('table'); tbl.className = 'compact';
-  tbl.innerHTML = '<thead><tr>' + rep.headers.map((h,i)=>`<th${i===0?' style="text-align:left"':''}></th>`).join('') + '</tr></thead>';
-  [...tbl.querySelectorAll('th')].forEach((th,i)=> th.textContent = rep.headers[i]);
-  const tb = document.createElement('tbody');
-  rep.rows.forEach(r=>{
-    const tr = document.createElement('tr');
-    r.forEach((c,i)=>{
-      const td = document.createElement('td');
-      if(i===0){ td.className='player'; td.style.whiteSpace='normal'; }
-      td.textContent = c;
-      tr.appendChild(td);
+  const pv = $('repPreview'); pv.innerHTML='';
+  const esc = t => { const d=document.createElement('span'); d.textContent=t; return d.innerHTML; };
+
+  if(rep.tipo === 'jugadora'){
+    const {pl, pjJ, total, serie} = rep.extra;
+    const enR = roster.find(r=>r.playerId===pl.id);
+    const med = x => pjJ ? Math.round(x/pjJ) : 0;
+    pv.innerHTML = `
+      <div class="rep-head">
+        <span class="chip" style="${chipStyle(pl.nombre)}">${enR ? enR.dorsal : esc(pl.nombre[0])}</span>
+        <div><div class="rp-name">${esc(pl.nombre)}</div><div class="rp-sub">${esc($('pvSubtitle')?.textContent || '')}${pjJ} partidos jugados</div></div>
+      </div>
+      <div class="stat-tiles">
+        <div class="tile brand"><div class="tv">${med(total.pts)}</div><div class="tl">Puntos/PJ</div></div>
+        <div class="tile"><div class="tv">${med(total.reb)}</div><div class="tl">Reb/PJ</div></div>
+        <div class="tile"><div class="tv">${med(total.ast)}</div><div class="tl">Asist/PJ</div></div>
+        <div class="tile ${valoracion(total)>=0?'win':'loss'}"><div class="tv">${med(valoracion(total))}</div><div class="tl">Val/PJ</div></div>
+      </div>
+      <div class="repChart">${serie.map((x)=>{
+        const maxP = Math.max(1, ...serie.map(y=>y.pts));
+        const h = Math.max(4, Math.round(x.pts/maxP*58));
+        return `<div class="bar${x.est?' est':''}${x.pts===0?' cero':''}" style="height:${h}px" title="${x.pts} pts"></div>`;
+      }).join('')}</div>`;
+    // tabla de detalle debajo
+    const tbl = document.createElement('table'); tbl.className='compact';
+    tbl.innerHTML = '<thead><tr>'+rep.headers.map((h,i)=>`<th${i===0?' style="text-align:left"':''}>${esc(h)}</th>`).join('')+'</tr></thead>';
+    const tb = document.createElement('tbody');
+    rep.rows.forEach(r=>{
+      const tr=document.createElement('tr');
+      if(/^(TOTAL|MEDIA)/.test(String(r[0]))) tr.className='total';
+      r.forEach((c,i)=>{const td=document.createElement('td'); if(i===0){td.className='player';td.style.whiteSpace='normal';} td.textContent=c; tr.appendChild(td);});
+      tb.appendChild(tr);
     });
-    tb.appendChild(tr);
-  });
-  tbl.appendChild(tb);
-  $('repPreview').innerHTML=''; $('repPreview').appendChild(tbl);
+    tbl.appendChild(tb);
+    const scroll=document.createElement('div'); scroll.className='table-scroll'; scroll.appendChild(tbl);
+    pv.appendChild(scroll);
+  }
+
+  if(rep.tipo === 'ranking'){
+    const {data, cat} = rep.extra;
+    const maxV = Math.max(0.0001, ...data.map(d=>d.valor));
+    data.forEach((dd,i)=>{
+      const enR = roster.find(r=>r.nombre===dd.nombre) || {};
+      const fila = document.createElement('div'); fila.className='rk-row';
+      const pct = Math.max(3, Math.round(100*Math.max(0,dd.valor)/maxV));
+      fila.innerHTML = `
+        <span class="rk-pos ${i<3?'p'+(i+1):''}">${i+1}</span>
+        <span class="chip" style="${chipStyle(dd.nombre)}">${enR.dorsal ?? esc(dd.nombre[0])}</span>
+        <span class="rk-name">${esc(dd.nombre)}<div class="rk-sub">${dd.n} PJ${dd.media && dd.media!=='—' ? ' · media '+esc(dd.media) : ''}</div></span>
+        <span class="rk-bar"><span class="rk-fill" style="width:${pct}%"></span></span>
+        <span class="rk-val">${esc(dd.texto)}</span>`;
+      pv.appendChild(fila);
+    });
+  }
+
+  if(rep.tipo === 'equipo'){
+    const {res, V, D, pf, pc, mejor, peor, mejorRacha, top, casa, fuera} = rep.extra;
+    const n = res.length;
+    pv.innerHTML = `
+      <div class="stat-tiles">
+        <div class="tile"><div class="tv">${n}</div><div class="tl">Partidos</div></div>
+        <div class="tile win"><div class="tv">${V}</div><div class="tl">Victorias</div></div>
+        <div class="tile loss"><div class="tv">${D}</div><div class="tl">Derrotas</div></div>
+        <div class="tile brand"><div class="tv">${(pf/n).toFixed(1)}</div><div class="tl">PF / partido</div></div>
+        <div class="tile"><div class="tv">${(pc/n).toFixed(1)}</div><div class="tl">PC / partido</div></div>
+        <div class="tile ${pf>=pc?'win':'loss'}"><div class="tv">${((pf-pc)/n).toFixed(1)}</div><div class="tl">Dif. media</div></div>
+      </div>
+      <h2 style="margin-top:4px">Forma · jornada a jornada</h2>
+      <div class="forma">${res.map(r=>`<span class="vd ${r.us>r.them?'win':'loss'}" title="J${r.jn}: ${r.us}-${r.them} vs ${esc(r.rival)}">${r.us>r.them?'V':'D'}</span>`).join('')}</div>
+      <ul class="rep-list">
+        <li><span class="k">En casa</span><span class="v">${casa.filter(r=>r.us>r.them).length} V — ${casa.filter(r=>r.us<r.them).length} D</span></li>
+        <li><span class="k">Fuera</span><span class="v">${fuera.filter(r=>r.us>r.them).length} V — ${fuera.filter(r=>r.us<r.them).length} D</span></li>
+        <li><span class="k">Mayor victoria</span><span class="v">${mejor.us}-${mejor.them} vs ${esc(mejor.rival)} (J${mejor.jn})${mejor.estimado?' ~':''}</span></li>
+        <li><span class="k">Mayor derrota</span><span class="v">${peor.us<peor.them ? peor.us+'-'+peor.them+' vs '+esc(peor.rival)+' (J'+peor.jn+')'+(peor.estimado?' ~':'') : '—'}</span></li>
+        <li><span class="k">Mejor racha de victorias</span><span class="v">${mejorRacha}</span></li>
+        <li><span class="k">Máximas anotadoras</span><span class="v">${top.map(t=>esc(t.n)+' ('+t.pts+')').join(' · ')}</span></li>
+      </ul>`;
+  }
+
+  if(rep.tipo === 'cruces'){
+    const {orden, ourId} = rep.extra;
+    const tbl = document.createElement('table'); tbl.className='cruces';
+    tbl.innerHTML = '<thead><tr>'+rep.headers.map(h=>`<th>${esc(h)}</th>`).join('')+'</tr></thead>';
+    const tb = document.createElement('tbody');
+    rep.rows.forEach((r,ri)=>{
+      const filaTeam = orden[ri];
+      const tr = document.createElement('tr');
+      if(filaTeam.id === ourId) tr.className='usrow';
+      r.forEach((c,ci)=>{
+        const td = document.createElement('td');
+        if(ci===0){ td.className='player'; td.textContent=c; tr.appendChild(td); return; }
+        const colTeam = orden[ci-1];
+        if(colTeam.id === filaTeam.id){ td.className='diag'; td.textContent='·'; tr.appendChild(td); return; }
+        td.textContent = c;
+        // teñir las celdas de nuestros partidos: verde si ganamos, rojo si perdimos
+        if(c && (colTeam.id === ourId || filaTeam.id === ourId)){
+          const mm = String(c).match(/^(\d+)-(\d+)/);
+          if(mm){
+            const casaPts=+mm[1], fueraPts=+mm[2];
+            const nuestrosPts = colTeam.id === ourId ? casaPts : fueraPts;
+            const rivalPts   = colTeam.id === ourId ? fueraPts : casaPts;
+            td.className = nuestrosPts > rivalPts ? 'cw' : 'cl';
+          }
+        }
+        tr.appendChild(td);
+      });
+      tb.appendChild(tr);
+    });
+    tbl.appendChild(tb);
+    const scroll=document.createElement('div'); scroll.className='table-scroll'; scroll.appendChild(tbl);
+    pv.appendChild(scroll);
+  }
+
   $('repResult').classList.remove('hidden');
 }
 
