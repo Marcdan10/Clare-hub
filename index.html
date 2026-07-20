@@ -296,7 +296,7 @@
   }
   nav.tabbar button{
     background:none;color:var(--steel);border:none;border-radius:0;
-    font-size:.95rem;font-weight:700;letter-spacing:.08em;
+    font-size:.88rem;font-weight:700;letter-spacing:.05em;
     padding:12px 10px 10px;display:flex;flex-direction:column;align-items:center;gap:2px;
     position:relative;
   }
@@ -592,6 +592,63 @@
     </div>
   </section>
 
+  <!-- ============ PESTAÑA: INFORMES ============ -->
+  <section id="tab-reports" class="hidden">
+    <header><h1>Informes</h1></header>
+    <div class="card">
+      <h2>Generar informe</h2>
+      <div class="filter-row">
+        <span class="lbl">Informe</span>
+        <select id="repTipo" style="flex:1;min-width:200px">
+          <option value="jugadora">Partido a partido de una jugadora</option>
+          <option value="ranking">Ranking por categoría</option>
+          <option value="equipo">Estadísticas del equipo (liga)</option>
+          <option value="cruces">Cuadro de resultados (cruces)</option>
+        </select>
+      </div>
+      <div class="filter-row" id="repRowJug">
+        <span class="lbl">Jugadora</span>
+        <select id="repJugadora" style="flex:1;min-width:160px"></select>
+      </div>
+      <div class="filter-row" id="repRowCat">
+        <span class="lbl">Categoría</span>
+        <select id="repCategoria" style="flex:1;min-width:160px">
+          <option value="pts">Puntos</option>
+          <option value="val">Valoración</option>
+          <option value="reb">Rebotes</option>
+          <option value="ast">Asistencias</option>
+          <option value="rob">Robos</option>
+          <option value="tap">Tapones</option>
+          <option value="per">Pérdidas</option>
+          <option value="fal">Faltas</option>
+          <option value="pct2">% tiros de 2</option>
+          <option value="pct3">% triples</option>
+          <option value="pct1">% tiros libres</option>
+          <option value="pj">Partidos jugados</option>
+        </select>
+      </div>
+      <div class="filter-row" id="repRowAmb">
+        <span class="lbl">Temporada</span>
+        <div class="seg" id="segRepSeason"></div>
+      </div>
+      <div class="filter-row" id="repRowFil">
+        <span class="lbl">Partidos</span>
+        <div class="seg" id="segRepFiltro"></div>
+      </div>
+      <button class="primary" id="btnRepGen" style="width:100%">Generar informe</button>
+    </div>
+    <div class="card hidden" id="repResult">
+      <h2 id="repTitulo">Informe</h2>
+      <div class="topbtns">
+        <button class="ghost" id="btnRepCsv">⭳ Excel / Sheets</button>
+        <button class="ghost" id="btnRepWord">⭳ Word</button>
+        <button class="ghost" id="btnRepPdf">🖨 PDF / Imprimir</button>
+      </div>
+      <div class="table-scroll" id="repPreview"></div>
+      <p class="hint" id="repNota"></p>
+    </div>
+  </section>
+
   <!-- ============ PESTAÑA: PLANTILLA ============ -->
   <section id="tab-roster" class="hidden">
     <header><h1>Plantilla</h1></header>
@@ -651,6 +708,7 @@
   <button data-tab="game" class="on"><span class="ico">🏀</span>Partido</button>
   <button data-tab="league"><span class="ico">🏆</span>Liga</button>
   <button data-tab="accum"><span class="ico">📊</span>Acumulado</button>
+  <button data-tab="reports"><span class="ico">📄</span>Informes</button>
   <button data-tab="roster"><span class="ico">👥</span>Plantilla</button>
 </nav>
 
@@ -2369,14 +2427,318 @@ $('btnFedApply').onclick = ()=>{
   fedParsed = null;
 };
 
+/* =================== INFORMES =================== */
+let repSeasonScope = 'cur';   // 'cur' | 'all'
+let repFiltro = 'liga';       // 'liga' | 'amistoso' | 'todo'
+let lastReport = null;        // {titulo, headers, rows, nota}
+
+function esJornadaEstimada(sd, key){
+  if(gameKind(key) !== 'liga' || !sd.league) return false;
+  const r = sd.league.rounds.find(r => r.num === parseInt(key,10));
+  const m = r && r.matches.find(m => m.home === sd.league.ourId || m.away === sd.league.ourId);
+  return !!(m && m.estimado);
+}
+
+// Agregado por jugadora parametrizado (independiente de los filtros del Acumulado)
+function aggPlayers(scopeSeasons, filtro){
+  const acum = {}, pj = {};
+  for(const sid of scopeSeasons){
+    const sd = seasons[sid];
+    const porDorsal = {};
+    (sd.roster || []).forEach(r => porDorsal[r.dorsal] = r.playerId);
+    for(const key of gameKeysOf(sd, filtro)){
+      const {stats} = computeStats('tot', sd.games[key].events, sd.roster || []);
+      for(const dorsal of Object.keys(stats)){
+        if(dorsal === 'R') continue;
+        const pid = porDorsal[dorsal]; if(!pid) continue;
+        const st = stats[dorsal];
+        if(!acum[pid]){ acum[pid] = nuevoStat(); pj[pid] = 0; }
+        if(Object.values(st).some(v => v > 0)) pj[pid]++;
+        Object.keys(acum[pid]).forEach(k => acum[pid][k] += st[k]);
+      }
+    }
+  }
+  return {acum, pj};
+}
+
+// Resultado de nuestro partido en una jornada (acta manda; rival del guardado si falta)
+function resultadoNuestro(sd, r){
+  const m = r.matches.find(m => m.home === sd.league.ourId || m.away === sd.league.ourId);
+  if(!m) return null;
+  const g = (sd.games || {})[String(r.num)];
+  const hasActa = g && g.events.length > 0;
+  let us = null, them = null;
+  if(hasActa){
+    const t = computeStats('tot', g.events, sd.roster || []);
+    us = t.us; them = t.them;
+    const guardadoThem = (m.home === sd.league.ourId) ? m.sa : m.sh;
+    if(them === 0 && guardadoThem !== null && guardadoThem !== undefined && guardadoThem > 0) them = guardadoThem;
+  }else if(m.played && m.sh !== null){
+    us = (m.home === sd.league.ourId) ? m.sh : m.sa;
+    them = (m.home === sd.league.ourId) ? m.sa : m.sh;
+  }
+  if(us === null) return null;
+  return {jn:r.num, us, them, casa: m.home === sd.league.ourId, estimado: !!m.estimado,
+          rival: (sd.league.teams.find(t => t.id === (m.home === sd.league.ourId ? m.away : m.home)) || {}).name || '¿?'};
+}
+
+function abrevEquipo(nombre, usados){
+  const stop = new Set(['cb','c','b','ce','ue','se','ab','de','la','el','les','els','a','i','y','sbf','esports','club']);
+  const partes = nombre.replace(/[·.,-]/g,' ').split(/\s+/).filter(w => w.length > 2 && !stop.has(w.toLowerCase()));
+  if(!partes.length) partes.push(...nombre.replace(/[·.,-]/g,' ').split(/\s+/).filter(Boolean));
+  let ab = (partes[0] || nombre).slice(0,4).toUpperCase();
+  let i = 1;
+  while(usados.has(ab) && i < partes.length){ ab = (ab + (partes[i][0]||'')).toUpperCase(); i++; }
+  while(usados.has(ab)) ab += '·';
+  usados.add(ab);
+  return ab;
+}
+
+function genReport(){
+  const tipo = $('repTipo').value;
+  const scope = repSeasonScope === 'all' ? Object.keys(seasons) : [currentSeason];
+  storeSeason();
+  let rep = null;
+
+  if(tipo === 'jugadora'){
+    const pid = $('repJugadora').value;
+    const pl = players.find(p => p.id === pid);
+    if(!pl){ alert('Elige una jugadora.'); return; }
+    const rows = []; const total = nuevoStat(); let pjJ = 0; let hayEst = false;
+    scope.forEach(sid=>{
+      const sd = seasons[sid];
+      const ent = (sd.roster || []).find(r => r.playerId === pid);
+      if(!ent) return;
+      for(const key of gameKeysOf(sd, repFiltro)){
+        const {stats} = computeStats('tot', sd.games[key].events, sd.roster);
+        const st = stats[ent.dorsal] || nuevoStat();
+        const jugo = Object.values(st).some(v => v > 0);
+        if(jugo){ pjJ++; Object.keys(total).forEach(k => total[k] += st[k]); }
+        const est = esJornadaEstimada(sd, key); if(est) hayEst = true;
+        const pref = (repSeasonScope === 'all' && scope.length > 1) ? sd.name + ' · ' : '';
+        rows.push([pref + gameLabelOf(sd, key) + (est ? ' ~' : ''),
+          st.pts, st.t1 + (st.f1?'/'+(st.t1+st.f1):''), st.t2 + (st.f2?'/'+(st.t2+st.f2):''), st.t3 + (st.f3?'/'+(st.t3+st.f3):''),
+          st.reb, st.ast, st.rob, st.tap, st.per, st.fal, valoracion(st)]);
+      }
+    });
+    rows.push(['TOTAL ('+pjJ+' PJ)', total.pts, total.t1+(total.f1?'/'+(total.t1+total.f1):''), total.t2+(total.f2?'/'+(total.t2+total.f2):''), total.t3+(total.f3?'/'+(total.t3+total.f3):''), total.reb, total.ast, total.rob, total.tap, total.per, total.fal, valoracion(total)]);
+    if(pjJ > 0){
+      const m = x => Math.round(x/pjJ);
+      rows.push(['MEDIA', m(total.pts), m(total.t1), m(total.t2), m(total.t3), m(total.reb), m(total.ast), m(total.rob), m(total.tap), m(total.per), m(total.fal), m(valoracion(total))]);
+    }
+    rep = {titulo: `Partido a partido · ${pl.nombre}`,
+           headers: ['Partido','PTS','T1','T2','T3','REB','AST','ROB','TAP','PÉR','FAL','VAL'],
+           rows, nota: (hayEst ? 'Los partidos marcados con ~ tienen estadísticas estimadas. ' : '') + 'T1/T2/T3: anotados/intentos (si constan los fallos).'};
+  }
+
+  if(tipo === 'ranking'){
+    const cat = $('repCategoria').value;
+    const {acum, pj} = aggPlayers(scope, repFiltro);
+    const nombresCat = {pts:'Puntos', val:'Valoración', reb:'Rebotes', ast:'Asistencias', rob:'Robos', tap:'Tapones', per:'Pérdidas', fal:'Faltas', pct2:'% tiros de 2', pct3:'% triples', pct1:'% tiros libres', pj:'Partidos jugados'};
+    const data = players.filter(p => acum[p.id]).map(p=>{
+      const st = acum[p.id]; const n = pj[p.id] || 0;
+      let valor, texto;
+      if(cat === 'pj'){ valor = n; texto = String(n); }
+      else if(cat === 'val'){ valor = valoracion(st); texto = String(valor); }
+      else if(cat.startsWith('pct')){
+        const k = 't'+cat[3], f = 'f'+cat[3];
+        const att = st[k] + st[f];
+        valor = att ? st[k]/att : -1;
+        texto = att ? `${st[k]}/${att} · ${Math.round(100*valor)}%` : '—';
+      }
+      else { valor = st[cat]; texto = String(valor); }
+      return {nombre: p.nombre, n, valor, texto, media: n ? (cat==='pj'?'—':String(Math.round((cat==='val'?valoracion(st):cat.startsWith('pct')?0:st[cat])/n))) : '—'};
+    }).sort((a,b)=> b.valor - a.valor || a.nombre.localeCompare(b.nombre));
+    const rows = data.map((d,i)=>[i+1, d.nombre, d.n, d.texto, cat.startsWith('pct')||cat==='pj' ? '—' : d.media]);
+    rep = {titulo: `Ranking · ${nombresCat[cat]}`,
+           headers: ['#','Jugadora','PJ', nombresCat[cat], 'Media/PJ'],
+           rows, nota: 'Ordenado de mayor a menor. Incluye partidos estimados si los hay.'};
+  }
+
+  if(tipo === 'equipo'){
+    const sd = seasons[currentSeason];
+    if(!sd.league){ alert('Esta temporada no tiene liga creada.'); return; }
+    const res = sd.league.rounds.map(r => resultadoNuestro(sd, r)).filter(Boolean);
+    if(!res.length){ alert('No hay partidos con resultado en la liga.'); return; }
+    const V = res.filter(r=>r.us>r.them), D = res.filter(r=>r.us<r.them);
+    const casa = res.filter(r=>r.casa), fuera = res.filter(r=>!r.casa);
+    const pf = res.reduce((a,r)=>a+r.us,0), pc = res.reduce((a,r)=>a+r.them,0);
+    const mejor = [...res].sort((a,b)=>(b.us-b.them)-(a.us-a.them))[0];
+    const peor  = [...res].sort((a,b)=>(a.us-a.them)-(b.us-b.them))[0];
+    let racha=0, mejorRacha=0;
+    res.sort((a,b)=>a.jn-b.jn).forEach(r=>{ if(r.us>r.them){ racha++; mejorRacha=Math.max(mejorRacha,racha);} else racha=0; });
+    const {acum} = aggPlayers([currentSeason], 'liga');
+    const top = players.filter(p=>acum[p.id]).map(p=>({n:p.nombre, pts:acum[p.id].pts})).sort((a,b)=>b.pts-a.pts).slice(0,3);
+    const est = res.filter(r=>r.estimado).length;
+    const rows = [
+      ['Partidos jugados', res.length],
+      ['Victorias — Derrotas', `${V.length} — ${D.length}`],
+      ['En casa (V—D)', `${casa.filter(r=>r.us>r.them).length} — ${casa.filter(r=>r.us<r.them).length}`],
+      ['Fuera (V—D)', `${fuera.filter(r=>r.us>r.them).length} — ${fuera.filter(r=>r.us<r.them).length}`],
+      ['Puntos a favor (total · media)', `${pf} · ${(pf/res.length).toFixed(1)}`],
+      ['Puntos en contra (total · media)', `${pc} · ${(pc/res.length).toFixed(1)}`],
+      ['Diferencia media', ((pf-pc)/res.length).toFixed(1)],
+      ['Mayor victoria', `${mejor.us}-${mejor.them} vs ${mejor.rival} (J${mejor.jn})${mejor.estimado?' ~':''}`],
+      ['Mayor derrota', peor.us<peor.them ? `${peor.us}-${peor.them} vs ${peor.rival} (J${peor.jn})${peor.estimado?' ~':''}` : '—'],
+      ['Mejor racha de victorias', mejorRacha],
+      ['Máximas anotadoras', top.map(t=>`${t.n} (${t.pts})`).join(' · ')]
+    ];
+    rep = {titulo: `Estadísticas del equipo · ${sd.name}`,
+           headers: ['Concepto','Valor'], rows,
+           nota: est ? `${est} de los ${res.length} partidos tienen estadísticas estimadas (~).` : ''};
+  }
+
+  if(tipo === 'cruces'){
+    const sd = seasons[currentSeason];
+    if(!sd.league){ alert('Esta temporada no tiene liga creada.'); return; }
+    const L = sd.league;
+    const orden = standings('all').map(r => r.team);
+    const usados = new Set();
+    const abrevs = new Map(orden.map(t => [t.id, abrevEquipo(t.name, usados)]));
+    // resultado por par (casa, fuera)
+    const celda = {};
+    for(const r of L.rounds){
+      for(const m of r.matches){
+        let sh = m.sh, sa = m.sa;
+        if(m.home === L.ourId || m.away === L.ourId){
+          const rn = resultadoNuestro(sd, r);
+          if(rn){ sh = m.home === L.ourId ? rn.us : rn.them; sa = m.away === L.ourId ? rn.us : rn.them; }
+        }
+        if(sh !== null && sh !== undefined && sa !== null && sa !== undefined && (m.played || m.home === L.ourId || m.away === L.ourId)){
+          if(m.played) celda[m.home + '|' + m.away] = `${sh}-${sa}` + (m.estimado ? ' ~' : '');
+        }
+      }
+    }
+    const headers = ['Fuera ⇩ · Casa ⇨', ...orden.map(t => abrevs.get(t.id))];
+    const rows = orden.map(fila => {
+      const r = [fila.name];
+      for(const col of orden){
+        if(col.id === fila.id){ r.push('—'); continue; }
+        r.push(celda[col.id + '|' + fila.id] || '');   // col = casa, fila = fuera
+      }
+      return r;
+    });
+    rep = {titulo: `Cuadro de resultados · ${sd.name}`,
+           headers, rows,
+           nota: 'Cada celda es el resultado del partido: el equipo de la COLUMNA jugó en casa y el de la FILA fuera. Leyenda: ' + orden.map(t=>`${abrevs.get(t.id)} = ${t.name}`).join(' · ')};
+  }
+
+  if(!rep) return;
+  lastReport = rep;
+  $('repTitulo').textContent = rep.titulo;
+  $('repNota').textContent = rep.nota || '';
+  const tbl = document.createElement('table'); tbl.className = 'compact';
+  tbl.innerHTML = '<thead><tr>' + rep.headers.map((h,i)=>`<th${i===0?' style="text-align:left"':''}></th>`).join('') + '</tr></thead>';
+  [...tbl.querySelectorAll('th')].forEach((th,i)=> th.textContent = rep.headers[i]);
+  const tb = document.createElement('tbody');
+  rep.rows.forEach(r=>{
+    const tr = document.createElement('tr');
+    r.forEach((c,i)=>{
+      const td = document.createElement('td');
+      if(i===0){ td.className='player'; td.style.whiteSpace='normal'; }
+      td.textContent = c;
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  $('repPreview').innerHTML=''; $('repPreview').appendChild(tbl);
+  $('repResult').classList.remove('hidden');
+}
+
+function repDescarga(blob, nombre){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = nombre;
+  document.body.appendChild(a); a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function repFecha(){ return new Date().toISOString().slice(0,10); }
+
+$('btnRepCsv').onclick = ()=>{
+  if(!lastReport) return;
+  const esc = v => '"' + String(v).replace(/"/g,'""') + '"';
+  const lineas = [lastReport.headers.map(esc).join(';'),
+                  ...lastReport.rows.map(r => r.map(esc).join(';'))];
+  const blob = new Blob(['\uFEFF' + lineas.join('\r\n')], {type:'text/csv;charset=utf-8'});
+  repDescarga(blob, `informe-${repFecha()}.csv`);
+};
+$('btnRepWord').onclick = ()=>{
+  if(!lastReport) return;
+  const esc = v => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const html = `<html><head><meta charset="utf-8"><style>
+    body{font-family:Arial,sans-serif} h2{color:#141b30}
+    table{border-collapse:collapse;width:100%} th,td{border:1px solid #999;padding:5px 9px;font-size:12px;text-align:center}
+    th{background:#141b30;color:#fff} td:first-child{text-align:left}
+    p{color:#555;font-size:11px}</style></head><body>
+    <h2>${esc(lastReport.titulo)}</h2>
+    <table><thead><tr>${lastReport.headers.map(h=>'<th>'+esc(h)+'</th>').join('')}</tr></thead>
+    <tbody>${lastReport.rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')}</tbody></table>
+    <p>${esc(lastReport.nota||'')}</p></body></html>`;
+  const blob = new Blob([html], {type:'application/msword'});
+  repDescarga(blob, `informe-${repFecha()}.doc`);
+};
+$('btnRepPdf').onclick = ()=>{
+  if(!lastReport) return;
+  const esc = v => String(v).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const html = `<html><head><meta charset="utf-8"><title>${esc(lastReport.titulo)}</title><style>
+    body{font-family:Arial,sans-serif;margin:24px} h2{color:#141b30}
+    table{border-collapse:collapse;width:100%} th,td{border:1px solid #aaa;padding:4px 8px;font-size:11px;text-align:center}
+    th{background:#141b30;color:#fff} td:first-child{text-align:left}
+    p{color:#555;font-size:10px} @media print{ body{margin:8mm} }</style></head><body>
+    <h2>${esc(lastReport.titulo)}</h2>
+    <table><thead><tr>${lastReport.headers.map(h=>'<th>'+esc(h)+'</th>').join('')}</tr></thead>
+    <tbody>${lastReport.rows.map(r=>'<tr>'+r.map(c=>'<td>'+esc(c)+'</td>').join('')+'</tr>').join('')}</tbody></table>
+    <p>${esc(lastReport.nota||'')}</p>
+    <script>window.onload=()=>setTimeout(()=>window.print(),300)</`+`script></body></html>`;
+  const w = window.open('', '_blank');
+  if(!w){ alert('El navegador ha bloqueado la ventana. Permite ventanas emergentes para esta web.'); return; }
+  w.document.write(html); w.document.close();
+};
+
+function renderReports(){
+  // jugadoras (todas las que existen, plantilla actual primero)
+  const sel = $('repJugadora'); sel.innerHTML='';
+  const enRoster = new Set(roster.map(r=>r.playerId));
+  const orden = [...players].sort((a,b)=> (enRoster.has(b.id)?1:0)-(enRoster.has(a.id)?1:0) || a.nombre.localeCompare(b.nombre));
+  orden.forEach(p=>{
+    const o = document.createElement('option'); o.value = p.id; o.textContent = p.nombre;
+    sel.appendChild(o);
+  });
+  // segmentos
+  const ss = $('segRepSeason'); ss.innerHTML='';
+  [['cur',(seasons[currentSeason]||{}).name||'Actual'],['all','Todas']].forEach(([v,txt])=>{
+    const b = document.createElement('button'); b.textContent = txt;
+    if(v === repSeasonScope) b.classList.add('on');
+    b.onclick = ()=>{ repSeasonScope = v; renderReports(); };
+    ss.appendChild(b);
+  });
+  const sf = $('segRepFiltro'); sf.innerHTML='';
+  [['liga','Liga'],['amistoso','Amistosos'],['todo','Todo']].forEach(([v,txt])=>{
+    const b = document.createElement('button'); b.textContent = txt;
+    if(v === repFiltro) b.classList.add('on');
+    b.onclick = ()=>{ repFiltro = v; renderReports(); };
+    sf.appendChild(b);
+  });
+  // visibilidad de opciones según tipo
+  const tipo = $('repTipo').value;
+  $('repRowJug').classList.toggle('hidden', tipo !== 'jugadora');
+  $('repRowCat').classList.toggle('hidden', tipo !== 'ranking');
+  $('repRowAmb').classList.toggle('hidden', !(tipo === 'jugadora' || tipo === 'ranking'));
+  $('repRowFil').classList.toggle('hidden', !(tipo === 'jugadora' || tipo === 'ranking'));
+}
+$('repTipo').onchange = renderReports;
+$('btnRepGen').onclick = genReport;
+
 /* =================== NAVEGACIÓN =================== */
-const TABS = ['game','league','accum','roster'];
+const TABS = ['game','league','accum','reports','roster'];
 function showTab(name){
   stopTalk();
   $('tab-player').classList.add('hidden');
   TABS.forEach(t=>{
     $('tab-'+t).classList.toggle('hidden', t !== name);
   });
+  if(name === 'reports') renderReports();
   document.querySelectorAll('nav.tabbar button').forEach(b=>{
     b.classList.toggle('on', b.dataset.tab === name);
   });
