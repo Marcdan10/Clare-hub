@@ -422,6 +422,7 @@
           <label class="check-row" style="margin-top:2px"><input type="checkbox" id="chkAutoSend"> Anotar solo al hacer una pausa al dictar (recomendado en iPhone)</label>
           <div class="voice-actions">
             <div class="seg" id="segLang" role="group" aria-label="Idioma del dictado"></div>
+            <p class="hint hidden" id="langHintKb" style="margin-top:8px">⚠ En iPhone/iPad el dictado usa el <b>micrófono del teclado</b>, y su idioma lo decide el teclado, no este selector: mantén pulsada la tecla 🌐 (o 🎙) del teclado y elige <b>català</b> antes de dictar.</p>
             <button class="ghost" id="btnUndo">↩ Deshacer última</button>
           </div>
         </div>
@@ -705,6 +706,7 @@
       </div>
       <input type="file" id="fileImport" accept="application/json,.json" class="hidden">
       <p class="hint" id="backupMsg"></p>
+      <p class="hint" id="appVer" style="text-align:center;opacity:.7"></p>
     </div>
     <div class="card">
       <button class="danger" id="btnClearRoster" style="width:100%">Borrar plantilla (equipo nuevo)</button>
@@ -1104,11 +1106,11 @@ function parseSegmento(raw){
 
   if(/ tiro libre | tir lliure | lliure | libre | un punto | un punt | de uno | d un /.test(t)) tipo = esFallo ? 'f1' : 't1';
   else if(/ triple | de tres | tres punt(o|s)s? /.test(t))          tipo = esFallo ? 'f3' : 't3';
-  else if(/ canasta | cistella | de dos | dos punt(o|s)s? /.test(t)) tipo = esFallo ? 'f2' : 't2';
+  else if(/ canasta | cistella | basquet | esmaixada | de dos | dos punt(o|s)s? /.test(t)) tipo = esFallo ? 'f2' : 't2';
   else if(/ rebote | rebot /.test(t))                               tipo = 'reb';
   else if(/ asistencia | assistencia /.test(t))                     tipo = 'ast';
   else if(/ rob(o|a) | robatori | recuperacion | recuperacio /.test(t)) tipo = 'rob';
-  else if(/ tapon | tap /.test(t))                                  tipo = 'tap';
+  else if(/ taponada | tapon | tap /.test(t))                       tipo = 'tap';
   else if(/ perdida | perdid[oa] | perdua /.test(t))                tipo = 'per';
   else if(/ personal | falta /.test(t))                             tipo = 'fal';
   else if(esFallo)                                                  tipo = 'f2'; // "fallo de la 5" a secas
@@ -1129,7 +1131,7 @@ function parseSegmento(raw){
   // 3) Si no, quitamos palabras de acción y cogemos el primer número restante (también compuesto)
   if(dorsal === null){
     let limpio = t
-      .replace(/tiro libre|tir lliure|lliure|un punto|un punt|de uno|d un|libre|triple|tres puntos|tres punts|de tres|canasta|cistella|dos puntos|dos punts|de dos|rebote|rebot|asistencia|assistencia|recuperacion|recuperacio|robatori|robo|roba|tapon|tap|perdida|perdua|personal|falta|fallo|fallado|fallada|falla|errada|error|no ha entrat|no entra|de la|del|de el|de l|numero|dorsal|jugadora|jugador|la|el|de|l|d/g,' ');
+      .replace(/tiro libre|tir lliure|lliure|un punto|un punt|de uno|d un|libre|triple|tres puntos|tres punts|de tres|canasta|cistella|basquet|esmaixada|dos puntos|dos punts|de dos|rebote|rebot|asistencia|assistencia|recuperacion|recuperacio|robatori|robo|roba|taponada|tapon|tap|perdida|perdua|personal|falta|fallo|fallado|fallada|falla|errada|error|no ha entrat|no entra|de la|del|de el|de l|numero|dorsal|jugadora|jugador|la|el|de|l|d/g,' ');
     const toks = limpio.trim().split(/\s+/);
     for(let i=0;i<toks.length;i++){
       if(palabraANum(toks[i]) === null) continue;
@@ -1146,7 +1148,7 @@ function parseSegmento(raw){
 }
 
 /* --- Varias jugadas en una misma frase: "rebote y canasta de la 15" --- */
-const ACTION_STARTERS = /\b(tiro libre|tir lliure|un punto|un punt|de uno|d un|triple|tres puntos|tres punts|de tres|canasta|cistella|dos puntos|dos punts|de dos|rebote|rebot|asistencia|assistencia|recuperacion|recuperacio|robatori|robo|roba|tapon|tap|perdida|perdua|personal|falta|libre|lliure)\b/g;
+const ACTION_STARTERS = /\b(tiro libre|tir lliure|un punto|un punt|de uno|d un|triple|tres puntos|tres punts|de tres|canasta|cistella|basquet|esmaixada|dos puntos|dos punts|de dos|rebote|rebot|asistencia|assistencia|recuperacion|recuperacio|robatori|robo|roba|taponada|tapon|tap|perdida|perdua|personal|falta|libre|lliure)\b/g;
 
 // Expresiones compuestas que contienen DOS palabras clave pero son UNA sola jugada:
 // "canasta de dos" = una canasta de 2 (no dos jugadas), "canasta de tres" = un triple,
@@ -2194,33 +2196,43 @@ function procesaTexto(texto){
 
 /* --- Pulsar para hablar --- */
 let pressed = false;
-let dictBuffer = [];
+let dictBuffer = [];    // finales de sesiones ya cerradas (por reinicios del motor)
+let dictSession = [];   // finales de la sesión ABIERTA: se reconstruye entera en cada evento
 let dictInterim = '';
 
 function initVoice(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if(!SR){
     $('noVoiceWarn').classList.remove('hidden');
+    $('langHintKb').classList.remove('hidden');
     $('btnMic').classList.add('hidden');
     $('ticker').textContent = 'Dicta con el micrófono del teclado en el campo de abajo, o toca una jugadora en la tabla';
     return;
   }
   recognition = new SR();
   recognition.lang = voiceLang;
-  recognition.continuous = true;
+  // En Android, el modo continuo de Chrome duplica resultados (defecto conocido).
+  // Ahí usamos sesiones de un solo final + reinicio automático mientras se mantenga pulsado.
+  recognition.continuous = !/android/i.test(navigator.userAgent);
   recognition.interimResults = true;
 
   recognition.onresult = (e)=>{
-    dictInterim = '';
-    for(let i = e.resultIndex; i < e.results.length; i++){
+    // IMPORTANTE (Android): e.results es la FOTO COMPLETA de la sesión y Chrome
+    // en Android reenvía resultados ya entregados. Por eso reconstruimos la
+    // sesión entera desde cero en cada evento, en lugar de ir apilando
+    // (apilar duplicaba las jugadas: una frase podía anotarse 4 veces).
+    dictSession = []; dictInterim = '';
+    for(let i = 0; i < e.results.length; i++){
       const res = e.results[i];
-      if(res.isFinal) dictBuffer.push(res[0].transcript.trim());
+      if(res.isFinal) dictSession.push(res[0].transcript.trim());
       else dictInterim += res[0].transcript;
     }
-    const oido = (dictBuffer.join(' ') + ' ' + dictInterim).trim();
+    const oido = (dictBuffer.concat(dictSession).join(' ') + ' ' + dictInterim).trim();
     if(pressed && oido) setTicker('🎤 ' + oido, false);
   };
   recognition.onend = ()=>{
+    // la sesión se cierra: sus finales pasan a confirmados (una sola vez)
+    if(dictSession.length){ dictBuffer.push(...dictSession); dictSession = []; }
     if(pressed){
       setTimeout(()=>{ if(pressed){ try{ recognition.start(); }catch(e){} } }, 100);
       return;
@@ -2252,11 +2264,15 @@ function renderLang(){
     if(l.code === voiceLang) b.classList.add('on');
     b.onclick = ()=>{
       voiceLang = l.code;
+      // Reconstruimos el motor de reconocimiento desde cero: algunos Chrome
+      // ignoran el cambio de idioma en un motor ya creado.
       if(recognition){
-        recognition.lang = voiceLang;
-        if(pressed){ try{ recognition.stop(); }catch(e){} }
+        try{ recognition.abort(); }catch(e){}
+        recognition = null;
+        initVoice();
       }
       save(); renderLang();
+      setTicker(voiceLang === 'ca-ES' ? '✓ Dictat en català activat' : '✓ Dictado en castellano activado', false);
     };
     sl.appendChild(b);
   });
@@ -2265,16 +2281,16 @@ function renderLang(){
 function startTalk(){
   if(!recognition || pressed) return;
   pressed = true;
-  dictBuffer = []; dictInterim = '';
+  dictBuffer = []; dictSession = []; dictInterim = '';
   try{
     recognition.start();
     setListening(true);
-    setTicker('Escuchando… suelta el botón al terminar', false);
+    setTicker(voiceLang === 'ca-ES' ? 'Escoltant en CATALÀ… deixa anar el botó en acabar' : 'Escuchando en CASTELLANO… suelta el botón al terminar', false);
   }catch(e){}
 }
 function processBuffer(){
-  const texto = (dictBuffer.join(' ') + ' ' + dictInterim).trim();
-  dictBuffer = []; dictInterim = '';
+  const texto = (dictBuffer.concat(dictSession).join(' ') + ' ' + dictInterim).trim();
+  dictBuffer = []; dictSession = []; dictInterim = '';
   if(texto) procesaTexto(texto);
 }
 function stopTalk(){
@@ -2896,6 +2912,7 @@ $('repTipo').onchange = renderReports;
 $('btnRepGen').onclick = genReport;
 
 /* =================== NAVEGACIÓN =================== */
+const APP_VERSION = 'v2.1 · dictado blindado';
 const TABS = ['game','league','accum','reports','roster'];
 function showTab(name){
   stopTalk();
@@ -3166,6 +3183,7 @@ initVoice();
   // envío automático: si el usuario no eligió, se activa solo donde no hay botón de voz (iPhone)
   $('chkAutoSend').checked = (autoSend === null || autoSend === undefined) ? !recognition : autoSend;
   $('inpOurName').value = ourTeamName;
+  $('appVer').textContent = APP_VERSION;
   renderLang();
   renderRoster();
   renderGame();
