@@ -448,6 +448,16 @@
   <section id="tab-league" class="hidden">
     <header><h1>Liga</h1></header>
 
+    <div class="card">
+      <h2>Temporada</h2>
+      <div class="filter-row" style="margin-bottom:0">
+        <select id="selSeason" style="flex:1;min-width:150px"></select>
+        <button class="ghost" id="btnRenSeason" aria-label="Renombrar temporada">✎</button>
+        <button class="primary" id="btnNewSeason">＋ Nueva temporada</button>
+      </div>
+      <p class="hint">Cada temporada tiene su propia liga, calendario, actas y dorsales. Las jugadoras son las mismas personas entre temporadas: su historial las sigue aunque cambien de número.</p>
+    </div>
+
     <!-- Configuración inicial de la liga -->
     <div id="leagueSetup">
       <div class="card">
@@ -535,6 +545,10 @@
     <header><h1>Acumulado de la temporada</h1></header>
     <div class="card">
       <h2>Estadísticas de nuestras jugadoras <span style="font-weight:400;text-transform:none;letter-spacing:0">· toca una jugadora para ver su partido a partido</span></h2>
+      <div class="filter-row">
+        <span class="lbl">Temporada</span>
+        <div class="seg" id="segAccumSeason" role="group" aria-label="Ámbito de temporadas"></div>
+      </div>
       <div class="filter-row">
         <span class="lbl">Ver</span>
         <div class="seg" id="segAccum" role="group" aria-label="Filtrar acumulado"></div>
@@ -664,7 +678,12 @@
 
 <script>
 /* =================== ESTADO =================== */
-let roster = [];            // [{dorsal, nombre}]
+let roster = [];            // temporada activa: [{dorsal, playerId, nombre}]
+let players = [];           // registro global de jugadoras: [{id, nombre}] — únicas por nombre
+let playerSeq = 1;
+let seasons = {};           // id → {name, league, games, roster, setupTeams, draftRounds, calMode, currentGame}
+let currentSeason = 's1';
+let seasonSeq = 2;
 let ourTeamName = 'Mi equipo';   // el equipo de la plantilla; sus partidos llevan acta
 let voiceLang = 'es-ES';    // 'es-ES' | 'ca-ES'
 let league = null;          // {teams:[{id,name}], ourId, rounds:[{num, matches:[{home,away,sh,sa,played}]}]}
@@ -713,24 +732,20 @@ function setSync(mode, txt){
 }
 
 function fullState(){
-  return {roster, ourTeamName, voiceLang, league, games, currentGame,
-          setupTeams, draftRounds, calMode, autoSend, _t: stateT, _client: CLIENT_ID};
+  storeSeason();
+  return {players, playerSeq, seasons, currentSeason, seasonSeq, teamSeq,
+          ourTeamName, voiceLang, autoSend, _t: stateT, _client: CLIENT_ID};
 }
 
 function applyState(d){
-  roster = d.roster || [];
-  ourTeamName = d.ourTeamName || 'Mi equipo';
-  voiceLang = d.voiceLang || 'es-ES';
-  league = d.league || null;
-  games = d.games || {};
-  currentGame = (d.currentGame !== undefined) ? d.currentGame : null;
-  setupTeams = d.setupTeams || [];
-  draftRounds = d.draftRounds || [];
-  calMode = d.calMode || 'manual';
-  if(d.autoSend !== undefined && d.autoSend !== null){ autoSend = d.autoSend; $('chkAutoSend').checked = autoSend; }
-  stateT = d._t || 0;
-  syncOurTeam(false);
-  repararReferencias();
+  const n = normalizeState(d);
+  players = n.players; playerSeq = n.playerSeq;
+  seasons = n.seasons; seasonSeq = n.seasonSeq; teamSeq = Math.max(teamSeq, n.teamSeq);
+  ourTeamName = n.ourTeamName;
+  voiceLang = n.voiceLang;
+  if(n.autoSend !== null){ autoSend = n.autoSend; $('chkAutoSend').checked = autoSend; }
+  stateT = n._t;
+  activateSeason(n.currentSeason, {skipStore:true});
   if(recognition) recognition.lang = voiceLang;
   $('inpOurName').value = ourTeamName;
   renderLang(); renderRoster(); renderGame(); renderLeague(); renderAccum();
@@ -817,6 +832,79 @@ async function initAuth(){
     $('loginView').classList.remove('hidden');
     if(!navigator.onLine) $('btnOffline').classList.remove('hidden');
   }
+}
+
+/* =================== TEMPORADAS Y JUGADORAS =================== */
+function nombreNorm(n){ return norm(n).replace(/\s+/g,' ').trim(); }
+
+// Devuelve la jugadora con ese nombre (creándola si no existe): la identidad es el nombre
+function ensurePlayer(nombre){
+  const ex = players.find(p => nombreNorm(p.nombre) === nombreNorm(nombre));
+  if(ex) return ex;
+  const nueva = {id:'p'+(playerSeq++), nombre: nombre.trim()};
+  players.push(nueva);
+  return nueva;
+}
+function renamePlayer(pid, nuevo){
+  const pl = players.find(p => p.id === pid);
+  if(!pl || !nuevo.trim()) return;
+  pl.nombre = nuevo.trim();
+  Object.values(seasons).forEach(sd => (sd.roster||[]).forEach(r => { if(r.playerId === pid) r.nombre = pl.nombre; }));
+  roster.forEach(r => { if(r.playerId === pid) r.nombre = pl.nombre; });
+}
+
+function storeSeason(){
+  const prev = seasons[currentSeason] || {};
+  seasons[currentSeason] = {name: prev.name || 'Temporada 1',
+    league, games, roster, setupTeams, draftRounds, calMode, currentGame};
+}
+function activateSeason(id, opts){
+  if(!(opts && opts.skipStore)) storeSeason();
+  currentSeason = id;
+  const sd = seasons[id] || (seasons[id] = {name:'Temporada', league:null, games:{}, roster:[], setupTeams:[], draftRounds:[], calMode:'manual', currentGame:null});
+  league = sd.league || null;
+  games = sd.games || {};
+  roster = sd.roster || [];
+  setupTeams = sd.setupTeams || [];
+  draftRounds = sd.draftRounds || [];
+  calMode = sd.calMode || 'manual';
+  currentGame = (sd.currentGame !== undefined) ? sd.currentGame : null;
+  statFilter = 'tot'; standUpto = 'all';
+  syncOurTeam(false);
+  repararReferencias();
+}
+
+// Normaliza cualquier formato guardado (nuevo con temporadas, o antiguo de una sola liga)
+function normalizeState(d){
+  if(d.seasons){
+    return {
+      players: d.players || [], playerSeq: d.playerSeq || 1,
+      seasons: d.seasons, currentSeason: d.currentSeason || Object.keys(d.seasons)[0] || 's1',
+      seasonSeq: d.seasonSeq || 2, teamSeq: d.teamSeq || 1,
+      ourTeamName: d.ourTeamName || 'Mi equipo',
+      voiceLang: d.voiceLang || 'es-ES',
+      autoSend: (d.autoSend !== undefined) ? d.autoSend : null,
+      _t: d._t || 0
+    };
+  }
+  // Migración desde el formato de una sola temporada
+  const pls = []; let seq = 1;
+  const rosterNuevo = (d.roster || []).map(r => {
+    let pl = pls.find(p => nombreNorm(p.nombre) === nombreNorm(r.nombre));
+    if(!pl){ pl = {id:'p'+(seq++), nombre:r.nombre}; pls.push(pl); }
+    return {dorsal:r.dorsal, playerId:pl.id, nombre:pl.nombre};
+  });
+  return {
+    players: pls, playerSeq: seq,
+    seasons: { s1: {name:'Temporada 1', league:d.league||null, games:d.games||{},
+      roster:rosterNuevo, setupTeams:d.setupTeams||[], draftRounds:d.draftRounds||[],
+      calMode:d.calMode||'manual', currentGame:(d.currentGame!==undefined)?d.currentGame:null} },
+    currentSeason:'s1', seasonSeq:2, teamSeq: 1,
+    ourTeamName: d.ourTeamName || 'Mi equipo',
+    voiceLang: d.voiceLang || 'es-ES',
+    autoSend: (d.autoSend !== undefined) ? d.autoSend : null,
+    _t: d._t || 0
+  };
 }
 
 /* =================== PERSISTENCIA =================== */
@@ -1065,9 +1153,10 @@ function nuevoStat(){ return {pts:0,t1:0,t2:0,t3:0,reb:0,ast:0,rob:0,tap:0,per:0
 const legacyRival = {r1:'t1', r2:'t2', r3:'t3'};
 
 // filterQ: 'tot' o nº de cuarto. evs: lista de eventos del partido.
-function computeStats(filterQ, evs){
+function computeStats(filterQ, evs, rosterList){
+  const rl = rosterList || roster;
   const stats = {};
-  roster.forEach(p => stats[p.dorsal] = nuevoStat());
+  rl.forEach(p => stats[p.dorsal] = nuevoStat());
   stats['R'] = nuevoStat();
   let us=0, them=0, ajusteUs=0, ajusteThem=0;
   for(const ev of (evs||[])){
@@ -1132,7 +1221,18 @@ function renderGame(){
 
   const total = computeStats('tot', g.events);
   $('scoreUs').textContent = total.us;
-  $('scoreThem').textContent = total.them;
+  // El rival puede no tener jugadas dictadas (p. ej. actas importadas solo con datos propios):
+  // en partidos de liga con resultado, mostramos su marcador oficial.
+  let themShown = total.them;
+  if(gameKind(currentGame) === 'liga' && league){
+    const rnd = league.rounds.find(r => r.num === parseInt(currentGame,10));
+    const mm = rnd && rnd.matches.find(m => m.home === league.ourId || m.away === league.ourId);
+    if(mm && mm.played && mm.sh !== null){
+      const themScore = mm.home === league.ourId ? mm.sa : mm.sh;
+      if(total.them === 0 && themScore > 0) themShown = themScore;
+    }
+  }
+  $('scoreThem').textContent = themShown;
 
   // Selector de cuarto
   const sq = $('segQuarter'); sq.innerHTML='';
@@ -1271,6 +1371,14 @@ function renderRoster(){
     const li = document.createElement('li');
     li.innerHTML = `<span class="chip">${p.dorsal}</span><span class="name"></span>`;
     li.querySelector('.name').textContent = p.nombre;
+    const ed = document.createElement('button');
+    ed.className='ghost'; ed.textContent='✎';
+    ed.setAttribute('aria-label','Cambiar el nombre de la jugadora');
+    ed.onclick = ()=>{
+      const nuevo = prompt('Nombre de la jugadora (se actualizará en todas las temporadas):', p.nombre);
+      if(nuevo && nuevo.trim()){ renamePlayer(p.playerId, nuevo); save(); renderRoster(); }
+    };
+    li.appendChild(ed);
     const del = document.createElement('button');
     del.className='ghost'; del.textContent='Quitar';
     del.onclick = ()=>{ roster.splice(i,1); save(); renderRoster(); };
@@ -1405,6 +1513,7 @@ function standings(upto){
 }
 
 function renderLeague(){
+  renderSeasonSelect();
   const hasLeague = !!league;
   $('leagueSetup').classList.toggle('hidden', hasLeague);
   $('leagueLive').classList.toggle('hidden', !hasLeague);
@@ -1667,8 +1776,10 @@ function renderBuilder(){
 }
 
 /* =================== ACUMULADO =================== */
-function orderedGameKeys(filtro){
-  const keys = Object.keys(games).filter(k => games[k].events.length > 0);
+// Claves de partido de una temporada, ordenadas: liga primero, luego amistosos
+function gameKeysOf(sd, filtro){
+  const gs = sd.games || {};
+  const keys = Object.keys(gs).filter(k => gs[k].events.length > 0);
   const liga = keys.filter(k => gameKind(k) === 'liga').sort((a,b)=>parseInt(a,10)-parseInt(b,10));
   const amis = keys.filter(k => gameKind(k) === 'amistoso')
     .sort((a,b)=> (a==='libre'?0:parseInt(String(a).slice(1),10)) - (b==='libre'?0:parseInt(String(b).slice(1),10)));
@@ -1676,15 +1787,28 @@ function orderedGameKeys(filtro){
   if(filtro === 'amistoso') return amis;
   return [...liga, ...amis];
 }
-function gameLabel(key){
+function gameLabelOf(sd, key){
   if(gameKind(key) === 'liga'){
-    const rival = rivalOfJornada(parseInt(key,10));
-    return 'J' + key + (rival ? ' · ' + rival.name : '');
+    let rivalName = '';
+    if(sd.league){
+      const r = sd.league.rounds.find(r => r.num === parseInt(key,10));
+      const m = r && r.matches.find(m => m.home === sd.league.ourId || m.away === sd.league.ourId);
+      if(m){
+        const rid = m.home === sd.league.ourId ? m.away : m.home;
+        const t = sd.league.teams.find(t => t.id === rid);
+        if(t) rivalName = ' · ' + t.name;
+      }
+    }
+    return 'J' + key + rivalName;
   }
   return friendlyLabel(key);
 }
+function orderedGameKeys(filtro){ storeSeason(); return gameKeysOf(seasons[currentSeason], filtro); }
+function gameLabel(key){ return gameLabelOf(seasons[currentSeason], key); }
 
-let accumMode = 'tot';   // 'tot' | 'media' | 'pct'
+let accumMode = 'tot';       // 'tot' | 'media' | 'pct'
+let accumSort = {key:'pts', dir:-1};   // columna y sentido de ordenación del acumulado
+let accumSeason = 'cur';     // 'cur' (temporada activa) | 'all' (todas)
 
 // Celdas de una fila de estadísticas según el modo de visualización
 function celdasStat(s, pj, mode){
@@ -1711,8 +1835,55 @@ function celdasStat(s, pj, mode){
     <td class="efi ${v>0?'pos':v<0?'neg':''}">${v}</td>`;
 }
 
+// Agrega por JUGADORA (playerId) en el ámbito de temporadas y filtro elegidos
+function accumPorJugadora(){
+  storeSeason();
+  const scope = accumSeason === 'all' ? Object.keys(seasons) : [currentSeason];
+  const acum = {}, pj = {};
+  for(const sid of scope){
+    const sd = seasons[sid];
+    const porDorsal = {};
+    (sd.roster || []).forEach(r => porDorsal[r.dorsal] = r.playerId);
+    for(const key of gameKeysOf(sd, accumFilter)){
+      const {stats} = computeStats('tot', sd.games[key].events, sd.roster || []);
+      for(const dorsal of Object.keys(stats)){
+        if(dorsal === 'R') continue;
+        const pid = porDorsal[dorsal];
+        if(!pid) continue;
+        const st = stats[dorsal];
+        if(!acum[pid]) { acum[pid] = nuevoStat(); pj[pid] = 0; }
+        if(Object.values(st).some(v => v > 0)) pj[pid]++;
+        Object.keys(acum[pid]).forEach(k => acum[pid][k] += st[k]);
+      }
+    }
+  }
+  return {acum, pj};
+}
+// Jugadoras a listar: primero la plantilla actual (por dorsal), luego el resto con datos
+function jugadorasEnAmbito(acum){
+  const lista = [];
+  const vistos = new Set();
+  [...roster].sort((a,b)=>a.dorsal-b.dorsal).forEach(r=>{
+    lista.push({playerId:r.playerId, nombre:r.nombre, dorsal:r.dorsal});
+    vistos.add(r.playerId);
+  });
+  players.filter(p => !vistos.has(p.id) && acum[p.id])
+    .sort((a,b)=>a.nombre.localeCompare(b.nombre))
+    .forEach(p => lista.push({playerId:p.id, nombre:p.nombre, dorsal:null}));
+  return lista;
+}
+
 function renderAccum(){
-  // Selector Liga / Amistosos / Todo
+  // Ámbito de temporadas
+  const ss = $('segAccumSeason'); ss.innerHTML='';
+  [['cur', (seasons[currentSeason]||{}).name || 'Actual'], ['all','Todas las temporadas']].forEach(([v,txt])=>{
+    const b = document.createElement('button');
+    b.textContent = txt;
+    if(v === accumSeason) b.classList.add('on');
+    b.onclick = ()=>{ accumSeason = v; renderAccum(); };
+    ss.appendChild(b);
+  });
+  // Liga / Amistosos / Todo
   const sa = $('segAccum'); sa.innerHTML='';
   [['liga','Liga'],['amistoso','Amistosos'],['todo','Liga + amistosos']].forEach(([v,txt])=>{
     const b = document.createElement('button');
@@ -1721,7 +1892,7 @@ function renderAccum(){
     b.onclick = ()=>{ accumFilter = v; renderAccum(); };
     sa.appendChild(b);
   });
-  // Selector Totales / Media / % tiro
+  // Totales / Media / % tiro
   const sm = $('segAccumMode'); sm.innerHTML='';
   [['tot','Totales'],['media','Media por partido'],['pct','% tiro']].forEach(([v,txt])=>{
     const b = document.createElement('button');
@@ -1731,35 +1902,65 @@ function renderAccum(){
     sm.appendChild(b);
   });
 
-  // Cabecera según el modo
-  $('accumHead').innerHTML = accumMode === 'pct'
-    ? `<th style="text-align:left">Jugadora</th><th>PJ</th><th>T1</th><th>T2</th><th>T3</th>`
-    : `<th style="text-align:left">Jugadora</th><th>PJ</th><th>PTS</th><th>T1</th><th>T2</th><th>T3</th>
-       <th>REB</th><th>AST</th><th>ROB</th><th>TAP</th><th>PÉR</th><th>FAL</th><th>VAL</th>`;
+  // Cabecera con columnas ordenables. Cada th lleva su clave de ordenación.
+  const cols = accumMode === 'pct'
+    ? [['nombre','Jugadora','left'],['pj','PJ'],['t1','T1'],['t2','T2'],['t3','T3']]
+    : [['nombre','Jugadora','left'],['pj','PJ'],['pts','PTS'],['t1','T1'],['t2','T2'],['t3','T3'],
+       ['reb','REB'],['ast','AST'],['rob','ROB'],['tap','TAP'],['per','PÉR'],['fal','FAL'],['val','VAL']];
+  const head = $('accumHead'); head.innerHTML='';
+  cols.forEach(([key,label,align])=>{
+    const th = document.createElement('th');
+    if(align==='left') th.style.textAlign='left';
+    th.textContent = label;
+    th.style.cursor = 'pointer';
+    th.style.userSelect = 'none';
+    if(accumSort.key === key) th.textContent = label + (accumSort.dir === 1 ? ' ▲' : ' ▼');
+    th.onclick = ()=>{
+      if(accumSort.key === key){ accumSort.dir *= -1; }
+      else { accumSort.key = key; accumSort.dir = (key === 'nombre') ? 1 : -1; }  // números: primero de mayor a menor
+      renderAccum();
+    };
+    head.appendChild(th);
+  });
 
+  const {acum, pj} = accumPorJugadora();
   const tb = $('accumBody'); tb.innerHTML='';
-  const acum = {}; const pj = {};
-  roster.forEach(p => { acum[p.dorsal] = nuevoStat(); pj[p.dorsal] = 0; });
-
-  for(const key of orderedGameKeys(accumFilter)){
-    const {stats} = computeStats('tot', games[key].events);
-    roster.forEach(p=>{
-      const s = stats[p.dorsal];
-      if(Object.values(s).some(v => v > 0)) pj[p.dorsal]++;
-      Object.keys(acum[p.dorsal]).forEach(k => acum[p.dorsal][k] += s[k]);
-    });
-  }
-
   const tot = nuevoStat(); let totPJ = 0;
-  roster.forEach(p=>{
-    const s = acum[p.dorsal];
-    Object.keys(tot).forEach(k=>tot[k]+=s[k]);
-    totPJ = Math.max(totPJ, pj[p.dorsal]);
+
+  // Construir las filas como datos para poder ordenarlas
+  const filas = jugadorasEnAmbito(acum).map(p=>{
+    const st = acum[p.playerId] || nuevoStat();
+    const npj = pj[p.playerId] || 0;
+    Object.keys(tot).forEach(k=>tot[k]+=st[k]);
+    totPJ = Math.max(totPJ, npj);
+    return {p, st, npj, val: valoracion(st)};
+  });
+  // Ordenar según la columna elegida
+  const val = (f)=>{
+    const k = accumSort.key;
+    if(k === 'nombre') return f.p.nombre.toLowerCase();
+    if(k === 'pj') return f.npj;
+    if(k === 'val') return f.val;
+    if(k === 'pts') return f.st.pts;
+    if(['t1','t2','t3'].includes(k)){
+      if(accumMode === 'pct'){ const a=f.st[k]+f.st['f'+k[1]]; return a? f.st[k]/a : -1; }
+      return f.st[k];
+    }
+    return f.st[k] ?? 0;
+  };
+  filas.sort((a,b)=>{
+    const va = val(a), vb = val(b);
+    if(va < vb) return -accumSort.dir;
+    if(va > vb) return accumSort.dir;
+    return a.p.nombre.localeCompare(b.p.nombre);
+  });
+
+  filas.forEach(({p, st, npj})=>{
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="player"><span class="chip">${p.dorsal}</span><span></span></td><td>${pj[p.dorsal]}</td>` + celdasStat(s, pj[p.dorsal], accumMode);
+    tr.innerHTML = `<td class="player"><span class="chip">${p.dorsal ?? '·'}</span><span></span></td><td>${npj}</td>` + celdasStat(st, npj, accumMode);
     tr.querySelector('.player span:last-child').textContent = p.nombre;
     tr.style.cursor = 'pointer';
-    tr.onclick = ()=>openPlayerView(p);
+    tr.onclick = ()=>openPlayerView(p.playerId);
     tb.appendChild(tr);
   });
   const trT = document.createElement('tr'); trT.className='total';
@@ -1768,32 +1969,48 @@ function renderAccum(){
 }
 
 /* =================== FICHA DE JUGADORA =================== */
-function openPlayerView(p){
-  $('pvTitle').textContent = `Nº ${p.dorsal} · ${p.nombre}`;
+function openPlayerView(pid){
+  const pl = players.find(p => p.id === pid);
+  if(!pl) return;
+  const enActual = roster.find(r => r.playerId === pid);
+  $('pvTitle').textContent = (enActual ? `Nº ${enActual.dorsal} · ` : '') + pl.nombre;
   const filtroTxt = accumFilter === 'liga' ? 'Liga' : accumFilter === 'amistoso' ? 'Amistosos' : 'Liga + amistosos';
-  $('pvSubtitle').textContent = `Partido a partido · ${filtroTxt}`;
+  const tempTxt = accumSeason === 'all' ? 'Todas las temporadas' : (seasons[currentSeason]||{}).name;
+  $('pvSubtitle').textContent = `Partido a partido · ${tempTxt} · ${filtroTxt}`;
 
+  storeSeason();
+  const scope = accumSeason === 'all' ? Object.keys(seasons) : [currentSeason];
   const tb = $('pvBody'); tb.innerHTML='';
-  const total = nuevoStat(); let pjJ = 0;
-  const keys = orderedGameKeys(accumFilter);
+  const total = nuevoStat(); let pjJ = 0; let filas = 0;
 
-  keys.forEach(key=>{
-    const {stats} = computeStats('tot', games[key].events);
-    const s = stats[p.dorsal];
-    const jugo = Object.values(s).some(v => v > 0);
-    if(jugo){ pjJ++; Object.keys(total).forEach(k => total[k] += s[k]); }
-    const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="player"></td>` + celdasStat(s, 1, 'tot');
-    tr.querySelector('.player').textContent = gameLabel(key);
-    if(!jugo) tr.style.opacity = '.45';
-    tr.style.cursor = 'pointer';
-    tr.onclick = ()=>{ currentGame = gameKind(key)==='liga' ? parseInt(key,10) : key; save(); showTab('game'); };
-    tb.appendChild(tr);
+  scope.forEach(sid=>{
+    const sd = seasons[sid];
+    const entrada = (sd.roster || []).find(r => r.playerId === pid);
+    if(!entrada) return;   // esa temporada no jugó en el equipo
+    for(const key of gameKeysOf(sd, accumFilter)){
+      const {stats} = computeStats('tot', sd.games[key].events, sd.roster);
+      const st = stats[entrada.dorsal] || nuevoStat();
+      const jugo = Object.values(st).some(v => v > 0);
+      if(jugo){ pjJ++; Object.keys(total).forEach(k => total[k] += st[k]); }
+      const tr = document.createElement('tr');
+      tr.innerHTML = `<td class="player"></td>` + celdasStat(st, 1, 'tot');
+      const pref = (accumSeason === 'all' && scope.length > 1) ? sd.name + ' · ' : '';
+      tr.querySelector('.player').textContent = pref + gameLabelOf(sd, key) + ` (nº ${entrada.dorsal})`;
+      if(!jugo) tr.style.opacity = '.45';
+      tr.style.cursor = 'pointer';
+      tr.onclick = ()=>{
+        if(sid !== currentSeason) activateSeason(sid);
+        currentGame = gameKind(key)==='liga' ? parseInt(key,10) : key;
+        save(); showTab('game');
+      };
+      tb.appendChild(tr);
+      filas++;
+    }
   });
 
-  if(!keys.length){
+  if(!filas){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td colspan="12" class="empty">No hay actas con jugadas en este filtro.</td>`;
+    tr.innerHTML = `<td colspan="12" class="empty">No hay actas con jugadas en este ámbito.</td>`;
     tb.appendChild(tr);
   }else{
     const trT = document.createElement('tr'); trT.className='total';
@@ -1969,6 +2186,39 @@ function saveFix(){
   }
 }
 
+/* =================== GESTIÓN DE TEMPORADAS =================== */
+function renderSeasonSelect(){
+  storeSeason();
+  const sel = $('selSeason'); sel.innerHTML='';
+  Object.keys(seasons).forEach(id=>{
+    const o = document.createElement('option');
+    o.value = id; o.textContent = seasons[id].name;
+    sel.appendChild(o);
+  });
+  sel.value = currentSeason;
+  sel.onchange = ()=>{
+    activateSeason(sel.value);
+    save();
+    renderRoster(); renderGame(); renderLeague(); renderAccum();
+  };
+}
+$('btnNewSeason').onclick = ()=>{
+  const nombre = prompt('Nombre de la nueva temporada:', 'Liga 26-27');
+  if(!nombre || !nombre.trim()) return;
+  storeSeason();
+  const copiar = roster.length > 0 && confirm(`¿Copiar la plantilla actual (${roster.length} jugadoras con sus dorsales) como punto de partida?\n\nDespués podrás cambiar los dorsales que hagan falta.`);
+  const id = 's' + (seasonSeq++);
+  seasons[id] = {name:nombre.trim(), league:null, games:{}, roster: copiar ? roster.map(r=>({...r})) : [],
+                 setupTeams:[], draftRounds:[], calMode:'manual', currentGame:null};
+  activateSeason(id);
+  save();
+  renderRoster(); renderGame(); renderLeague(); renderAccum();
+};
+$('btnRenSeason').onclick = ()=>{
+  const nuevo = prompt('Nombre de esta temporada:', seasons[currentSeason].name);
+  if(nuevo && nuevo.trim()){ seasons[currentSeason].name = nuevo.trim(); save(); renderLeague(); }
+};
+
 /* =================== IMPORTAR DE LA FEDERACIÓN =================== */
 let fedParsed = null;
 
@@ -2124,8 +2374,10 @@ $('btnAdd').onclick = ()=>{
   const n = $('inpNombre').value.trim();
   if(isNaN(d) || d<0 || d>99){ $('inpDorsal').focus(); return; }
   if(!n){ $('inpNombre').focus(); return; }
-  if(roster.some(p=>p.dorsal===d)){ alert('Ya existe una jugadora con ese dorsal.'); return; }
-  roster.push({dorsal:d, nombre:n});
+  if(roster.some(p=>p.dorsal===d)){ alert('Ya existe una jugadora con ese dorsal en esta temporada.'); return; }
+  const pl = ensurePlayer(n);
+  if(roster.some(p=>p.playerId===pl.id)){ alert(`${pl.nombre} ya está en la plantilla de esta temporada (con otro dorsal).`); return; }
+  roster.push({dorsal:d, playerId:pl.id, nombre:pl.nombre});
   $('inpDorsal').value=''; $('inpNombre').value='';
   $('inpDorsal').focus();
   save(); renderRoster();
@@ -2140,7 +2392,7 @@ $('inpOurName').addEventListener('change', ()=>{
 });
 $('btnClearRoster').onclick = ()=>{
   if(!roster.length) return;
-  if(!confirm('¿Borrar TODA la plantilla? Las actas guardadas quedarán sin jugadoras. Esto es para empezar con un equipo nuevo.')) return;
+  if(!confirm('¿Vaciar la plantilla de ESTA temporada (dorsales)? Las jugadoras no se eliminan del historial: sus estadísticas de otras temporadas se conservan.')) return;
   roster = []; save(); renderRoster();
 };
 $('btnExport').onclick = exportData;
@@ -2291,13 +2543,9 @@ $('chkAutoSend').addEventListener('change', ()=>{
 
 /* =================== EXPORTAR / IMPORTAR =================== */
 function snapshot(){
-  return {
-    _app: 'acta-basket',
-    _version: 2,
-    _exportedAt: new Date().toISOString(),
-    roster, ourTeamName, voiceLang, league, games, currentGame,
-    setupTeams, draftRounds, calMode, autoSend
-  };
+  const st = fullState();
+  delete st._client;
+  return { _app:'acta-basket', _version:3, _exportedAt:new Date().toISOString(), ...st };
 }
 function exportData(){
   const data = snapshot();
@@ -2322,31 +2570,19 @@ function importData(file){
     let d;
     try{ d = JSON.parse(reader.result); }
     catch(e){ backupMsg('✗ El archivo no es válido (no se pudo leer).', true); return; }
-    if(!d || d._app !== 'acta-basket' || !('roster' in d)){
+    if(!d || d._app !== 'acta-basket' || !('roster' in d || 'seasons' in d)){
       backupMsg('✗ Ese archivo no es una copia de esta app.', true); return;
     }
-    const nJug = (d.roster||[]).length;
-    const nEq = d.league ? d.league.teams.length : 0;
-    const nActas = d.games ? Object.keys(d.games).length : 0;
-    if(!confirm(`Vas a sustituir TODOS los datos actuales por los del archivo:\n\n· ${nJug} jugadoras\n· ${nEq} equipos\n· ${nActas} actas guardadas\n\n¿Continuar?`)) return;
-    roster = d.roster || [];
-    voiceLang = d.voiceLang || 'es-ES';
-    league = d.league || null;
-    games = d.games || {};
-    currentGame = (d.currentGame !== undefined) ? d.currentGame : null;
-    setupTeams = d.setupTeams || [];
-    draftRounds = d.draftRounds || [];
-    calMode = d.calMode || 'manual';
-    if(d.autoSend !== undefined && d.autoSend !== null){ autoSend = d.autoSend; $('chkAutoSend').checked = autoSend; }
-    if(d.ourTeamName){ ourTeamName = d.ourTeamName; }
-    syncOurTeam(false);   // exportaciones antiguas sin nombre: adopta el de la liga
-    repararReferencias();
-    $('inpOurName').value = ourTeamName;
-    if(recognition) recognition.lang = voiceLang;
-    statFilter = 'tot'; standUpto = 'all';
+    const pre = normalizeState(d);
+    const nJug = pre.players.length;
+    const nTemp = Object.keys(pre.seasons).length;
+    const nActas = Object.values(pre.seasons).reduce((a,sd)=>a+Object.keys(sd.games||{}).length,0);
+    if(!confirm(`Vas a sustituir TODOS los datos actuales por los del archivo:\n\n· ${nJug} jugadoras\n· ${nTemp} temporada(s)\n· ${nActas} actas guardadas\n\n¿Continuar?`)) return;
+    applyState(d);
+    stateT = Date.now();      // la importación cuenta como el estado más reciente
     await save();
     renderLang(); renderRoster(); renderGame(); renderLeague();
-    backupMsg(`✓ Datos importados: ${nJug} jugadoras, ${nEq} equipos, ${nActas} actas.`, false);
+    backupMsg(`✓ Datos importados: ${nJug} jugadoras, ${nTemp} temporada(s), ${nActas} actas.`, false);
   };
   reader.onerror = ()=> backupMsg('✗ No se pudo leer el archivo.', true);
   reader.readAsText(file);
@@ -2357,27 +2593,26 @@ initVoice();
 (async ()=>{
   const d = await load();
   if(d){
-    roster = d.roster || [];
-    voiceLang = d.voiceLang || 'es-ES';
-    league = d.league || null;
-    games = d.games || {};
-    currentGame = (d.currentGame !== undefined) ? d.currentGame : null;
-    setupTeams = (d.setupTeams || []).filter(t => !t.ours || !d.ourTeamName);
-    draftRounds = d.draftRounds || [];
-    if(d.ourTeamName){ ourTeamName = d.ourTeamName; }
-    else if(league){
-      const cur = league.teams.find(t => t.id === league.ourId);
-      if(cur) ourTeamName = cur.name;
-    }
-    syncOurTeam(false);
-    calMode = d.calMode || 'manual';
-    // el contador de ids sigue por encima del mayor existente
-    const ids = [...setupTeams, ...(league ? league.teams : [])].map(t=>parseInt(String(t.id).replace('t',''),10)).filter(n=>!isNaN(n));
-    if(ids.length) teamSeq = Math.max(...ids) + 1;
+    const n = normalizeState(d);
+    players = n.players; playerSeq = n.playerSeq;
+    seasons = n.seasons; seasonSeq = n.seasonSeq; teamSeq = Math.max(teamSeq, n.teamSeq);
+    ourTeamName = n.ourTeamName;
+    voiceLang = n.voiceLang;
+    if(n.autoSend !== null) autoSend = n.autoSend;
+    stateT = n._t;
+    activateSeason(n.currentSeason, {skipStore:true});
+    // el contador de ids de equipo sigue por encima del mayor existente en cualquier temporada
+    const ids = [];
+    Object.values(seasons).forEach(sd=>{
+      (sd.setupTeams||[]).forEach(t=>ids.push(t.id));
+      if(sd.league) sd.league.teams.forEach(t=>ids.push(t.id));
+    });
+    const nums = ids.map(id=>parseInt(String(id).replace('t',''),10)).filter(x=>!isNaN(x));
+    if(nums.length) teamSeq = Math.max(teamSeq, Math.max(...nums)+1);
     if(recognition) recognition.lang = voiceLang;
-    if(d.autoSend !== undefined) autoSend = d.autoSend;
-    stateT = d._t || 0;
     await saveLocal(); // consolida en el formato nuevo sin alterar el sello
+  }else{
+    storeSeason();     // primera vez: crea la Temporada 1 vacía
   }
   // envío automático: si el usuario no eligió, se activa solo donde no hay botón de voz (iPhone)
   $('chkAutoSend').checked = (autoSend === null || autoSend === undefined) ? !recognition : autoSend;
