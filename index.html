@@ -1215,7 +1215,14 @@ function renderGame(){
   }
   const rival = rivalOfJornada(currentGame);
   const esAmistoso = gameKind(currentGame) === 'amistoso';
-  $('gameTitle').textContent = esAmistoso ? friendlyLabel(currentGame) : `Jornada ${currentGame}`;
+  // ¿es un partido con estadísticas estimadas (simuladas)?
+  let esEstimado = false;
+  if(!esAmistoso && league){
+    const rr = league.rounds.find(r => r.num === parseInt(currentGame,10));
+    const mm = rr && rr.matches.find(m => m.home === league.ourId || m.away === league.ourId);
+    esEstimado = !!(mm && mm.estimado);
+  }
+  $('gameTitle').textContent = (esAmistoso ? friendlyLabel(currentGame) : `Jornada ${currentGame}`) + (esEstimado ? ' · ~ estimado' : '');
   $('scoreThemLbl').textContent = rival ? rival.name : 'Rival';
   $('btnFinish').classList.toggle('hidden', esAmistoso);
 
@@ -1493,11 +1500,17 @@ function standings(upto){
     if(upto !== 'all' && r.num > upto) continue;
     for(const m of r.matches){
       let sh = m.sh, sa = m.sa, played = m.played;
-      // nuestro partido: manda el acta; si no hay acta, vale el resultado importado
+      // nuestro partido: manda el acta para NUESTROS puntos; los del rival salen del acta,
+      // y si ahí son 0 pero hay resultado guardado, se usa el guardado (actas importadas).
       if(m.home === league.ourId || m.away === league.ourId){
         const {us, them, hasActa} = ourScores(r.num);
         if(hasActa){
-          if(m.home === league.ourId){ sh = us; sa = them; } else { sh = them; sa = us; }
+          const guardadoThem = (m.home === league.ourId) ? m.sa : m.sh;
+          let themReal = them;
+          if(themReal === 0 && guardadoThem !== null && guardadoThem !== undefined && guardadoThem > 0){
+            themReal = guardadoThem;
+          }
+          if(m.home === league.ourId){ sh = us; sa = themReal; } else { sh = themReal; sa = us; }
         }
       }
       if(!played || sh === null || sa === null) continue;
@@ -1573,6 +1586,7 @@ function renderLeague(){
       const isOurs = m.home === league.ourId || m.away === league.ourId;
       const row = document.createElement('div');
       row.className = 'match' + (isOurs ? ' ours' : '');
+      if(isOurs && m.estimado) row.title = 'Estadísticas estimadas';
 
       const hn = document.createElement('span');
       hn.className = 'tname right' + (m.home===league.ourId?' us':'');
@@ -1583,9 +1597,17 @@ function renderLeague(){
         const {us, them, hasActa} = ourScores(r.num);
         const res = document.createElement('span'); res.className='res';
         if(hasActa){
-          const sh = m.home===league.ourId ? us : them;
-          const sa = m.away===league.ourId ? us : them;
-          res.textContent = `${sh} - ${sa}`;
+          // Puntos propios desde el acta; los del rival desde el acta, y si ahí son 0
+          // pero hay resultado guardado en la liga, se usa ese (actas importadas sin rival).
+          const usAward = us;
+          let themAward = them;
+          const guardadoThem = (m.home === league.ourId) ? m.sa : m.sh;
+          if(themAward === 0 && guardadoThem !== null && guardadoThem !== undefined && guardadoThem > 0){
+            themAward = guardadoThem;
+          }
+          const sh = m.home===league.ourId ? usAward : themAward;
+          const sa = m.away===league.ourId ? usAward : themAward;
+          res.textContent = `${sh} - ${sa}` + (m.estimado ? ' ~' : '');
         }else if(m.sh !== null && m.sh !== undefined){
           res.textContent = `${m.sh} - ${m.sa}`;   // resultado importado (sin acta)
         }else{
