@@ -407,14 +407,14 @@
           botones tocando cada jugadora funciona igualmente.
         </div>
         <div class="mic-zone">
-          <button class="mic" id="btnMic" aria-pressed="false" aria-label="Mantén pulsado para dictar la jugada">
+          <button class="mic" id="btnMic" aria-pressed="false" aria-label="Toca para activar o desactivar el dictado">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
               <path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/>
             </svg>
-            <span id="micLabel">Mantén pulsado</span>
+            <span id="micLabel">Toca y dicta</span>
           </button>
-          <div class="ticker" id="ticker">Mantén pulsado el balón mientras dictas la jugada</div>
+          <div class="ticker" id="ticker">Toca el balón, dicta las jugadas (con una pequeña pausa entre ellas) y vuelve a tocarlo para parar</div>
           <div class="row" style="width:100%">
             <input type="text" id="inpDictado" placeholder="…o escribe/dicta aquí la jugada" autocomplete="off" autocapitalize="off">
             <button class="primary" id="btnDictado" aria-label="Anotar la jugada escrita">➤</button>
@@ -427,13 +427,25 @@
           </div>
         </div>
         <p class="hint">
-          Ejemplos: <b>«canasta de la 5»</b> (2 pts) · <b>«triple de la 10»</b> · <b>«tiro libre / un punto de la 8»</b> ·
-          <b>«rebote de la 12»</b> · <b>«asistencia de la 4»</b> · <b>«personal de la 7»</b> ·
-          <b>«pérdida de la 6»</b> · <b>«robo de la 9»</b> · <b>«tapón de la 11»</b> ·
-          <b>«fallo de tres de la 5»</b> · <b>«rival canasta»</b>.
+          <b>Frases que entiende</b> (jugada + dorsal; entre jugadas, una pequeña pausa):<br>
+          🏀 Puntos: <b>«canasta de la 5»</b> (2p) · <b>«triple de la 10»</b> · <b>«tiro libre de la 8»</b><br>
+          ❌ Fallos: <b>«fallo de la 5»</b> · <b>«fallo de tres de la 10»</b> · <b>«tiro libre fallado de la 8»</b><br>
+          ✋ Juego: <b>«rebote de la 12»</b> · <b>«asistencia de la 4»</b> · <b>«robo de la 9»</b> · <b>«tapón de la 11»</b> · <b>«pérdida de la 6»</b> · <b>«personal de la 7»</b><br>
+          🆚 Rival: <b>«rival canasta»</b> · <b>«triple del rival»</b> · <b>«falta del rival»</b><br>
+          ➕ Varias de golpe: <b>«canasta de la 5 y rebote de la 10»</b><br>
           En català: <b>«cistella de la 5»</b> · <b>«tir lliure de la 8»</b> · <b>«rebot de la 12»</b> ·
-          <b>«pèrdua de la 6»</b> · <b>«tap de l'11»</b> · <b>«errada de tres de la 5»</b>.
+          <b>«assistència de la 4»</b> · <b>«pèrdua de la 6»</b> · <b>«tap de l'11»</b> ·
+          <b>«errada de tres de la 5»</b> · <b>«rival cistella»</b>.
         </p>
+      </div>
+
+      <div class="card">
+        <h2>Diagnóstico del dictado</h2>
+        <ul class="log" id="diagList"><li class="empty">Aún no hay dictados en esta sesión</li></ul>
+        <div class="topbtns" style="margin:10px 0 0">
+          <button class="ghost" id="btnDiagCopy">⧉ Copiar diagnóstico</button>
+        </div>
+        <p class="hint">Últimos 10 dictados: lo que se oyó → cómo se interpretó. Si algo falla, toca «Copiar diagnóstico» y pégamelo en el chat para afinarlo con datos reales.</p>
       </div>
 
       <div class="card">
@@ -1095,6 +1107,38 @@ function numCompuesto(w1, w2){
 }
 
 /* =================== PARSER DE VOZ =================== */
+/* Corrector difuso: arregla palabras de acción mal transcritas por Google
+   («sistella»→«cistella», «rebota»→«rebote») aceptando 1 letra de diferencia.
+   Los números en palabra y las palabras cortas quedan protegidos. */
+const LEXICO_ACCIONES = ['canasta','cistella','basquet','esmaixada','triple','rebote','rebot',
+  'asistencia','assistencia','recuperacion','recuperacio','robatori','taponada','tapon',
+  'perdida','perdua','personal','falta','fallo','fallado','fallada','errada','libre','lliure',
+  'rival','contrari','dorsal','numero'];
+const PROTEGIDAS = new Set(['punto','puntos','punt','punts','roba','robo','tres','dos','uno','una','un','falla','fallan','falle']);
+function distEd1(a, b){
+  if(a === b) return true;
+  const la = a.length, lb = b.length;
+  if(Math.abs(la - lb) > 1) return false;
+  let i = 0, j = 0, dif = 0;
+  while(i < la && j < lb){
+    if(a[i] === b[j]){ i++; j++; continue; }
+    if(++dif > 1) return false;
+    if(la === lb){ i++; j++; }
+    else if(la > lb){ i++; }
+    else { j++; }
+  }
+  return dif + (la - i) + (lb - j) <= 1;
+}
+function corrigeDifuso(t){
+  return t.split(/\s+/).map(w=>{
+    if(w.length < 4 || /\d/.test(w)) return w;
+    if(PROTEGIDAS.has(w) || palabraANum(w) !== null) return w;
+    if(LEXICO_ACCIONES.includes(w)) return w;
+    for(const k of LEXICO_ACCIONES){ if(distEd1(w, k)) return k; }
+    return w;
+  }).join(' ');
+}
+
 function parseSegmento(raw){
   let t = ' ' + norm(raw).replace(/[.,;!?]/g,' ').replace(/\s+/g,' ').trim() + ' ';
 
@@ -1141,6 +1185,12 @@ function parseSegmento(raw){
     }
   }
 
+  // 4) Red final: si hay acción pero el dorsal se resiste, cualquier número 1-99 de la frase vale
+  if(dorsal === null){
+    const mnum = t.match(/ ([1-9][0-9]?) /);
+    if(mnum) dorsal = parseInt(mnum[1], 10);
+  }
+
   if(dorsal === null) return {ok:false, code:'nodorsal', tipo, msg:'No he entendido el dorsal'};
   if(!roster.some(p => p.dorsal === dorsal)) return {ok:false, msg:`No hay ninguna jugadora con el ${dorsal}`};
 
@@ -1166,6 +1216,7 @@ function colapsa(t){
 
 function parseMulti(raw){
   let t = ' ' + norm(raw).replace(/[.,;!?]/g,' ').replace(/\s+/g,' ').trim() + ' ';
+  t = ' ' + corrigeDifuso(t.trim()) + ' ';
   t = colapsa(t);
   const matches = [...t.matchAll(ACTION_STARTERS)];
 
@@ -2174,7 +2225,11 @@ function openPlayerView(pid){
 /* =================== VOZ =================== */
 function procesaTexto(texto){
   if(!texto) return;
-  if(!curGame()){ setTicker('Abre un acta primero (pestaña Liga)', true); return; }
+  if(!curGame()){
+    setTicker('Abre un acta primero (pestaña Liga)', true);
+    logDiag(texto, '✗ sin acta abierta');
+    return;
+  }
   const resultados = parseMulti(texto);
   const oks = [], errs = [];
   for(const r of resultados){
@@ -2185,20 +2240,45 @@ function procesaTexto(texto){
       errs.push(r.msg);
     }
   }
-  if(oks.length && !errs.length){
-    setTicker('✓ ' + oks.join('  ·  '), false, texto);
-  }else if(oks.length){
-    setTicker('✓ ' + oks.join('  ·  ') + '   ✗ ' + errs[0], false, texto);
-  }else{
-    setTicker('✗ ' + (errs[0] || 'No he entendido la jugada'), true, texto);
-  }
+  let res;
+  if(oks.length && !errs.length)      res = '✓ ' + oks.join('  ·  ');
+  else if(oks.length)                 res = '✓ ' + oks.join('  ·  ') + '   ✗ ' + errs[0];
+  else                                res = '✗ ' + (errs[0] || 'No he entendido la jugada');
+  setTicker(res, !oks.length, texto);
+  logDiag(texto, res);
 }
 
-/* --- Pulsar para hablar --- */
-let pressed = false;
-let dictBuffer = [];    // finales de sesiones ya cerradas (por reinicios del motor)
-let dictSession = [];   // finales de la sesión ABIERTA: se reconstruye entera en cada evento
-let dictInterim = '';
+/* --- Diagnóstico: últimos dictados con su interpretación --- */
+const diagLog = [];
+function logDiag(oido, res){
+  diagLog.unshift({oido, res});
+  if(diagLog.length > 10) diagLog.pop();
+  renderDiag();
+}
+function renderDiag(){
+  const ul = $('diagList'); if(!ul) return;
+  ul.innerHTML = '';
+  if(!diagLog.length){
+    ul.innerHTML = '<li class="empty">Aún no hay dictados en esta sesión</li>';
+    return;
+  }
+  diagLog.forEach(d=>{
+    const li = document.createElement('li');
+    const t = document.createElement('span'); t.className = 't'; t.textContent = '🎤';
+    const desc = document.createElement('span'); desc.className = 'desc';
+    desc.textContent = '«' + d.oido + '» → ' + d.res;
+    li.appendChild(t); li.appendChild(desc);
+    ul.appendChild(li);
+  });
+}
+
+/* --- Dictado por conmutador: un toque escucha, otro toque para --- */
+let wantListen = false;      // el usuario ha activado la escucha (conmutador)
+let sessionDone = 0;         // finales de la sesión abierta ya procesados
+let lastUtt = '';            // escudo antiduplicados: última frase normalizada…
+let lastUttT = 0;            // …y cuándo llegó
+let restartDelay = 250;      // reinicio automático con retardo creciente
+let wakeLock = null;         // pantalla encendida mientras se escucha
 
 function initVoice(){
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -2211,49 +2291,76 @@ function initVoice(){
   }
   recognition = new SR();
   recognition.lang = voiceLang;
-  // En Android, el modo continuo de Chrome duplica resultados (defecto conocido).
-  // Ahí usamos sesiones de un solo final + reinicio automático mientras se mantenga pulsado.
+  // Android: sesiones de un solo final + reinicio automático (el modo continuo
+  // de Chrome en Android duplica resultados; es un defecto conocido).
   recognition.continuous = !/android/i.test(navigator.userAgent);
   recognition.interimResults = true;
 
   recognition.onresult = (e)=>{
-    // IMPORTANTE (Android): e.results es la FOTO COMPLETA de la sesión y Chrome
-    // en Android reenvía resultados ya entregados. Por eso reconstruimos la
-    // sesión entera desde cero en cada evento, en lugar de ir apilando
-    // (apilar duplicaba las jugadas: una frase podía anotarse 4 veces).
-    dictSession = []; dictInterim = '';
+    // e.results es la FOTO COMPLETA de la sesión. Procesamos cada final UNA sola
+    // vez, en cuanto llega, como frase atómica. Los provisionales solo se muestran.
+    const finales = [];
+    let interim = '';
     for(let i = 0; i < e.results.length; i++){
-      const res = e.results[i];
-      if(res.isFinal) dictSession.push(res[0].transcript.trim());
-      else dictInterim += res[0].transcript;
+      const r = e.results[i];
+      if(r.isFinal) finales.push(r[0].transcript.trim());
+      else interim += r[0].transcript;
     }
-    const oido = (dictBuffer.concat(dictSession).join(' ') + ' ' + dictInterim).trim();
-    if(pressed && oido) setTicker('🎤 ' + oido, false);
+    for(let i = sessionDone; i < finales.length; i++) onUtterance(finales[i]);
+    sessionDone = finales.length;
+    if(wantListen && interim.trim()) setTicker('🎤 ' + interim.trim(), false);
   };
   recognition.onend = ()=>{
-    // la sesión se cierra: sus finales pasan a confirmados (una sola vez)
-    if(dictSession.length){ dictBuffer.push(...dictSession); dictSession = []; }
-    if(pressed){
-      setTimeout(()=>{ if(pressed){ try{ recognition.start(); }catch(e){} } }, 100);
+    sessionDone = 0;
+    if(wantListen){
+      // el motor se ha parado solo (silencio, fin de sesión…): lo relanzamos
+      setTimeout(()=>{
+        if(!wantListen) return;
+        try{ recognition.start(); restartDelay = 250; }
+        catch(err){ restartDelay = Math.min(restartDelay * 2, 2000); }
+      }, restartDelay);
       return;
     }
     setListening(false);
-    processBuffer();
   };
   recognition.onerror = (e)=>{
-    if(e.error==='not-allowed'){
+    if(e.error === 'not-allowed' || e.error === 'service-not-allowed'){
       setTicker('Permiso de micrófono denegado. Actívalo en los ajustes del navegador.', true);
-      pressed = false; setListening(false);
+      wantListen = false; setListening(false); releaseWakeLock();
+    }else if(e.error === 'network'){
+      setTicker('Sin conexión con el servicio de voz. Reintentando…', true);
     }
+    // 'no-speech' y 'aborted' se ignoran: onend se encarga de reiniciar
   };
 }
+
+/* ÚNICA PUERTA DE ENTRADA de frases dictadas. La voz web, el campo de texto
+   y (en el futuro) el motor nativo de iOS/Android vía Capacitor entran por aquí. */
+function onUtterance(texto){
+  texto = (texto || '').trim();
+  if(!texto) return;
+  const n = norm(texto).replace(/\s+/g,' ').trim();
+  const ahora = Date.now();
+  if(n === lastUtt && ahora - lastUttT < 1500) return;   // eco duplicado del motor
+  lastUtt = n; lastUttT = ahora;
+  procesaTexto(texto);
+}
+
+/* Pantalla encendida durante la escucha (si el móvil se duerme, el dictado muere) */
+async function requestWakeLock(){
+  try{ if('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); }catch(e){}
+}
+function releaseWakeLock(){ try{ if(wakeLock) wakeLock.release(); }catch(e){} wakeLock = null; }
+document.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'visible' && wantListen) requestWakeLock();
+});
 
 function setListening(on){
   listening = on;
   const mic = $('btnMic');
   mic.classList.toggle('listening', on);
   mic.setAttribute('aria-pressed', on);
-  $('micLabel').textContent = on ? 'Escuchando' : 'Mantén pulsado';
+  $('micLabel').textContent = on ? 'Escuchando' : 'Toca y dicta';
 }
 
 function renderLang(){
@@ -2263,43 +2370,50 @@ function renderLang(){
     b.textContent = l.label;
     if(l.code === voiceLang) b.classList.add('on');
     b.onclick = ()=>{
+      const estaba = wantListen;
       voiceLang = l.code;
-      // Reconstruimos el motor de reconocimiento desde cero: algunos Chrome
-      // ignoran el cambio de idioma en un motor ya creado.
+      // Reconstruimos el motor desde cero (algunos Chrome ignoran el cambio
+      // de idioma en caliente). Silenciamos el motor viejo para que su onend
+      // no intente relanzarse.
       if(recognition){
+        recognition.onend = null; recognition.onresult = null; recognition.onerror = null;
         try{ recognition.abort(); }catch(e){}
         recognition = null;
+        wantListen = false;
         initVoice();
       }
       save(); renderLang();
-      setTicker(voiceLang === 'ca-ES' ? '✓ Dictat en català activat' : '✓ Dictado en castellano activado', false);
+      if(estaba && recognition){
+        startListening();
+      }else{
+        setTicker(voiceLang === 'ca-ES' ? '✓ Dictat en català activat' : '✓ Dictado en castellano activado', false);
+      }
     };
     sl.appendChild(b);
   });
 }
 
-function startTalk(){
-  if(!recognition || pressed) return;
-  pressed = true;
-  dictBuffer = []; dictSession = []; dictInterim = '';
-  try{
-    recognition.start();
-    setListening(true);
-    setTicker(voiceLang === 'ca-ES' ? 'Escoltant en CATALÀ… deixa anar el botó en acabar' : 'Escuchando en CASTELLANO… suelta el botón al terminar', false);
-  }catch(e){}
+function startListening(){
+  if(!recognition || wantListen) return;
+  wantListen = true; sessionDone = 0; restartDelay = 250;
+  lastUtt = ''; lastUttT = 0;
+  try{ recognition.start(); }catch(e){}
+  setListening(true);
+  requestWakeLock();
+  setTicker(voiceLang === 'ca-ES'
+    ? 'Escoltant en CATALÀ… dicta les jugades; torna a tocar el baló per parar'
+    : 'Escuchando en CASTELLANO… dicta las jugadas; vuelve a tocar el balón para parar', false);
 }
-function processBuffer(){
-  const texto = (dictBuffer.concat(dictSession).join(' ') + ' ' + dictInterim).trim();
-  dictBuffer = []; dictSession = []; dictInterim = '';
-  if(texto) procesaTexto(texto);
-}
-function stopTalk(){
-  if(!pressed) return;
-  pressed = false;
+function stopListening(){
+  if(!wantListen && !listening) return;
+  wantListen = false;
   setListening(false);
+  releaseWakeLock();
   try{ recognition.stop(); }catch(e){}
-  setTimeout(processBuffer, 1200);
 }
+function toggleListening(){ if(wantListen){ stopListening(); } else { startListening(); } }
+/* Compatibilidad: el resto de la app apaga el dictado con stopTalk() */
+function stopTalk(){ stopListening(); }
 
 /* =================== HOJAS =================== */
 function openSheet(p){
@@ -2912,7 +3026,7 @@ $('repTipo').onchange = renderReports;
 $('btnRepGen').onclick = genReport;
 
 /* =================== NAVEGACIÓN =================== */
-const APP_VERSION = 'v2.2 · puntuación y rival';
+const APP_VERSION = 'v3.0 · dictado replanteado';
 const TABS = ['game','league','accum','reports','roster'];
 function showTab(name){
   stopTalk();
@@ -3068,15 +3182,21 @@ $('sheetClose').onclick = closeSheet;
 $('sheetBack').onclick = closeSheet;
 $('btnUndo').onclick = undo;
 
-// Pulsar para hablar
+// Dictado por conmutador: un toque escucha, otro toque para
 const mic = $('btnMic');
-mic.addEventListener('pointerdown', e=>{ e.preventDefault(); startTalk(); });
-mic.addEventListener('pointerup', stopTalk);
-mic.addEventListener('pointercancel', stopTalk);
-mic.addEventListener('pointerleave', stopTalk);
-mic.addEventListener('keydown', e=>{ if((e.key===' '||e.key==='Enter') && !e.repeat){ e.preventDefault(); startTalk(); } });
-mic.addEventListener('keyup', e=>{ if(e.key===' '||e.key==='Enter'){ e.preventDefault(); stopTalk(); } });
+mic.addEventListener('click', ()=>toggleListening());
 mic.addEventListener('contextmenu', e=>e.preventDefault());
+
+// Copiar el diagnóstico del dictado para pegarlo en el chat
+$('btnDiagCopy').onclick = ()=>{
+  const txt = diagLog.map(d=>'OYÓ: ' + d.oido + '\n→ ' + d.res).join('\n\n') || 'Sin dictados aún';
+  const listo = ()=>setTicker('✓ Diagnóstico copiado: pégalo en el chat', false);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(txt).then(listo).catch(()=>{ prompt('Copia esto:', txt); });
+  }else{
+    prompt('Copia esto:', txt);
+  }
+};
 
 // Dictado/escritura por teclado (vía principal en iPhone, respaldo en el resto)
 function enviarDictado(){
